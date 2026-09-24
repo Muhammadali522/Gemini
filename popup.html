@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <style>
+    :root {
+      --bg-color: #0f0f12;
+      --text-color: #e3e3e6;
+      --sub-text: #a1a1aa;
+      --input-bg: #16161a;
+      --border-color: #2c2c35;
+    }
+
+    :root.light {
+      --bg-color: #ffffff;
+      --text-color: #1f1f23;
+      --sub-text: #5f6368;
+      --input-bg: #f1f3f4;
+      --border-color: #dadce0;
+    }
+
+    body {
+      width: 320px;
+      padding: 18px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg-color);
+      color: var(--text-color);
+      margin: 0;
+      transition: background 0.2s, color 0.2s;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    h3 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 600;
+      color: #8ab4f8;
+    }
+
+    :root.light h3 {
+      color: #4776e6;
+    }
+
+    #theme-toggle {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 16px;
+      padding: 6px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: inherit;
+    }
+
+    #theme-toggle:hover {
+      background: rgba(128, 128, 128, 0.15);
+    }
+
+    .select-container {
+      margin-bottom: 14px;
+    }
+
+    label.block-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--sub-text);
+      display: block;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    select {
+      width: 100%;
+      padding: 10px;
+      background: var(--input-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      color: var(--text-color);
+      font-size: 13px;
+      outline: none;
+      cursor: pointer;
+    }
+
+    select:focus {
+      border-color: #4776e6;
+    }
+
+    .toggle-container {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(128, 128, 128, 0.08);
+      padding: 10px 12px;
+      border-radius: 10px;
+      margin-bottom: 10px;
+      border: 1px solid var(--border-color);
+    }
+
+    .toggle-label {
+      font-size: 13px;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 40px;
+      height: 22px;
+    }
+
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #ccc;
+      transition: .3s;
+      border-radius: 22px;
+    }
+
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 16px;
+      width: 16px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .3s;
+      border-radius: 50%;
+    }
+
+    input:checked+.slider {
+      background: linear-gradient(135deg, #8ab4f8, #4776e6);
+    }
+
+    input:checked+.slider:before {
+      transform: translateX(18px);
+    }
+
+    .slider-box {
+      background: rgba(128, 128, 128, 0.08);
+      padding: 10px 12px;
+      border-radius: 10px;
+      margin-bottom: 12px;
+      border: 1px solid var(--border-color);
+    }
+
+    .slider-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+
+    .slider-top .slider-label {
+      font-size: 13px;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .slider-val-badge {
+      font-size: 11.5px;
+      font-weight: 600;
+      color: #8ab4f8;
+      background: rgba(138, 180, 248, 0.12);
+      padding: 2px 7px;
+      border-radius: 6px;
+    }
+
+    :root.light .slider-val-badge {
+      color: #4776e6;
+      background: rgba(71, 118, 230, 0.12);
+    }
+
+    .opacity-range {
+      width: 100%;
+      height: 6px;
+      border-radius: 3px;
+      background: var(--border-color);
+      outline: none;
+      -webkit-appearance: none;
+      cursor: pointer;
+      margin: 4px 0;
+    }
+
+    .opacity-range::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #8ab4f8;
+      cursor: pointer;
+      transition: transform 0.1s;
+    }
+
+    :root.light .opacity-range::-webkit-slider-thumb {
+      background: #4776e6;
+    }
+
+    .opacity-range::-webkit-slider-thumb:hover {
+      transform: scale(1.15);
+    }
+
+    .slider-hints {
+      display: flex;
+      justify-content: space-between;
+      font-size: 10px;
+      color: var(--sub-text);
+      margin-top: 3px;
+    }
+
+    p {
+      font-size: 12px;
+      color: var(--sub-text);
+      line-height: 1.5;
+      margin: 12px 0 6px 0;
+    }
+
+    input[type="password"] {
+      width: 100%;
+      padding: 11px;
+      margin: 4px 0 14px 0;
+      background: var(--input-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      box-sizing: border-box;
+      font-size: 13px;
+      color: var(--text-color);
+      outline: none;
+    }
+
+    input[type="password"]:focus {
+      border-color: #4776e6;
+    }
+
+    button#save {
+      width: 100%;
+      padding: 12px;
+      background: linear-gradient(135deg, #8ab4f8, #4776e6);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 14px;
+    }
+
+    button#save:hover {
+      opacity: 0.9;
+    }
+
+    #status {
+      font-size: 12px;
+      color: #34a853;
+      text-align: center;
+      margin-top: 8px;
+      font-weight: 500;
+      min-height: 16px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="header">
+    <h3>✨ Gemini Quick Assist</h3>
+    <button id="theme-toggle" title="Сменить тему">🌙</button>
+  </div>
+
+  <div class="toggle-container">
+    <span class="toggle-label">🤖 Ассистент</span>
+    <label class="switch">
+      <input type="checkbox" id="assistant-active" checked>
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div class="toggle-container">
+    <span class="toggle-label">🛡️ Другой режим (обход)</span>
+    <label class="switch">
+      <input type="checkbox" id="bypass-active" checked>
+      <span class="slider"></span>
+    </label>
+  </div>
+
+  <div class="slider-box">
+    <div class="slider-top">
+      <span class="slider-label">👻 Прозрачность (маскировка)</span>
+      <span id="opacity-val" class="slider-val-badge">25%</span>
+    </div>
+    <input type="range" id="opacity-slider" class="opacity-range" min="10" max="85" value="25" step="5">
+    <div class="slider-hints">
+      <span>10% (невидимо)</span>
+      <span>25% (стекло)</span>
+      <span>85% (плотно)</span>
+    </div>
+  </div>
+
+  <div class="select-container">
+    <label class="block-label">⚡ Активная модель ИИ (Switch Model):</label>
+    <select id="model-mode">
+      <option value="gemini-3.8-flash">Gemini 3.8 Flash</option>
+      <option value="gemini-3.7-flash">Gemini 3.7 Flash</option>
+      <option value="gemini-3.6-flash">Gemini 3.6 Flash</option>
+      <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash Lite</option>
+      <option value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite</option>
+      <option value="auto-flash">Auto Flash (3.8 ➔ 3.7 ➔ 3.6 ➔ 3.8)</option>
+      <option value="auto-flash-lite">Auto Flash Lite (3.5 Lite ➔ 3.1 Lite ➔ 3.5 Lite)</option>
+    </select>
+  </div>
+
+  <p>Персональный API-ключ Gemini:</p>
+  <input type="password" id="apiKey" placeholder="AIzaSy..." autocomplete="off">
+  <button id="save">Сохранить настройки</button>
+  <div id="status"></div>
+
+  <script src="popup.js"></script>
+</body>
+
+</html>
