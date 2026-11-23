@@ -2,11 +2,14 @@ let timeoutId = null;
 let currentButton = null;
 let currentPopup = null;
 let shadowHost = null;
+let closedShadowRoot = null;
 let buttonHideTimeout = null;
 let currentRequestId = 0;
 let currentAnchorRect = null;
 let currentOriginalContext = '';
 let currentLastAnswer = '';
+let currentLastScreenshot = null;
+let popupOpenedAt = 0;
 
 // ==================== БЕЗОПАСНАЯ РАБОТА С CHROME STORAGE & RUNTIME ====================
 function isExtensionValid() {
@@ -33,9 +36,7 @@ function safeGetStorageSync(keys, callback) {
             if (typeof callback === 'function') {
                 try {
                     callback(data);
-                } catch (cbErr) {
-                    console.error('[Gemini Assistant] Ошибка в callback storage.sync:', cbErr);
-                }
+                } catch (cbErr) {}
             }
             resolve(data);
         };
@@ -47,35 +48,24 @@ function safeGetStorageSync(keys, callback) {
 
         try {
             chrome.storage.sync.get(keys, (items) => {
-                const lastErr = chrome.runtime?.lastError;
-                if (lastErr) {
-                    if (!lastErr.message?.includes('context invalidated')) {
-                        console.warn('[Gemini Assistant] Ошибка чтения chrome.storage.sync:', lastErr);
-                    }
+                if (chrome.runtime?.lastError) {
                     finish(fallback);
                     return;
                 }
                 finish(items || fallback);
             });
         } catch (err) {
-            if (!err?.message?.includes('context invalidated')) {
-                console.error('[Gemini Assistant] Ошибка вызова chrome.storage.sync.get:', err);
-            }
             finish(fallback);
         }
     });
 }
 
-const safeStorageGet = safeGetStorageSync;
-
 // ==================== ОЧИСТКА И ФОРМАТИРОВАНИЕ MATH / LATEX ====================
 function formatMath(str) {
     if (!str) return "";
     return str
-        // Убираем блочные $$ и строчные $ формулы
         .replace(/\$\$([\s\S]*?)\$\$/g, ' $1 ')
         .replace(/\$([^\$\n]+)\$/g, ' $1 ')
-        // Заменяем популярные команды LaTeX на понятные символы
         .replace(/\\times\b/g, '×')
         .replace(/\\cdot\b/g, '·')
         .replace(/\\div\b/g, ':')
@@ -87,21 +77,17 @@ function formatMath(str) {
         .replace(/\\degree\b/g, '°')
         .replace(/\\circ\b/g, '°')
         .replace(/\\infty\b/g, '∞')
-        // Греческие символы
         .replace(/\\alpha\b/g, 'α')
         .replace(/\\beta\b/g, 'β')
         .replace(/\\gamma\b/g, 'γ')
         .replace(/\\pi\b/g, 'π')
-        // Дроби и корни
         .replace(/\\sqrt\{([^}]+)\}/g, '√($1)')
         .replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, '($1/$2)')
-        // Степени и индексы
         .replace(/\^2\b/g, '²')
         .replace(/\^3\b/g, '³')
         .replace(/_0\b/g, '₀')
         .replace(/_1\b/g, '₁')
         .replace(/_2\b/g, '₂')
-        // Удаление лишних обратных слэшей
         .replace(/\\([a-zA-Z]+)/g, '$1')
         .replace(/ {2,}/g, ' ');
 }
@@ -137,7 +123,6 @@ function renderMarkdown(md) {
 
     let text = stripEmojis(md).replace(/\r\n/g, "\n");
 
-    // 1. Извлекаем блоки кода с синтаксисом ```lang ... ```
     const codeBlocks = [];
     text = text.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (match, lang, code) => {
         const id = `__GEMINI_CODE_${codeBlocks.length}__`;
@@ -147,13 +132,9 @@ function renderMarkdown(md) {
         return `\n\n${id}\n\n`;
     });
 
-    // 2. Обрабатываем математические выражения ($...$, \times и т.д.)
     text = formatMath(text);
-
-    // 3. Безопасное экранирование всех HTML тегов для защиты от XSS
     text = escapeHtml(text);
 
-    // 4. Таблицы Markdown
     text = text.replace(/(?:^|\n)((?:\|[^\n]+\|\r?\n?)+)/g, (match, tableBlock) => {
         const lines = tableBlock.trim().split("\n").map(l => l.trim()).filter(Boolean);
         if (lines.length < 2) return match;
@@ -180,14 +161,12 @@ function renderMarkdown(md) {
         return `\n\n${html}\n\n`;
     });
 
-    // 5. Цитаты (> ...)
     text = text.replace(/(?:^|\n)((?:&gt;[^\n]+\r?\n?)+)/g, (match, quoteBlock) => {
         const lines = quoteBlock.trim().split("\n").map(l => l.replace(/^&gt;\s?/, ""));
         const content = lines.map(l => formatInlines(l)).join("<br>");
         return `\n\n<blockquote class="gemini-quote">${content}</blockquote>\n\n`;
     });
 
-    // 6. Заголовки
     text = text.replace(/^######\s+(.+)$/gm, '<h6 class="gemini-h6">$1</h6>');
     text = text.replace(/^#####\s+(.+)$/gm, '<h5 class="gemini-h5">$1</h5>');
     text = text.replace(/^####\s+(.+)$/gm, '<h4 class="gemini-h4">$1</h4>');
@@ -195,7 +174,6 @@ function renderMarkdown(md) {
     text = text.replace(/^##\s+(.+)$/gm, '<h3 class="gemini-h3">$1</h3>');
     text = text.replace(/^#\s+(.+)$/gm, '<h2 class="gemini-h2">$1</h2>');
 
-    // 7. Списки
     text = text.replace(/(?:^|\n)((?:[ \t]*[-*]\s+[^\n]+\r?\n?)+)/g, (match, listBlock) => {
         const items = listBlock.trim().split("\n").map(l => l.replace(/^[ \t]*[-*]\s+/, ""));
         return '\n\n<ul class="gemini-ul">' + items.map(i => `<li>${formatInlines(i)}</li>`).join("") + '</ul>\n\n';
@@ -206,7 +184,6 @@ function renderMarkdown(md) {
         return '\n\n<ol class="gemini-ol">' + items.map(i => `<li>${formatInlines(i)}</li>`).join("") + '</ol>\n\n';
     });
 
-    // 8. Параграфы и переносы
     const rawBlocks = text.split(/\n{2,}/);
     const processed = rawBlocks.map(block => {
         const trimmed = block.trim();
@@ -219,7 +196,6 @@ function renderMarkdown(md) {
 
     let result = processed.filter(Boolean).join("\n");
 
-    // 9. Возвращаем блоки кода
     codeBlocks.forEach((cb, idx) => {
         result = result.replace(`__GEMINI_CODE_${idx}__`, cb);
     });
@@ -227,24 +203,35 @@ function renderMarkdown(md) {
     return result;
 }
 
-// ==================== SHADOW DOM И ИНИЦИАЛИЗАЦИЯ ====================
-function getShadowContainer() {
+// ==================== CLOSED SHADOW DOM ====================
+function ensureShadowRoot() {
     if (!shadowHost || !shadowHost.parentNode) {
         shadowHost = document.createElement('div');
         shadowHost.id = 'ui-ext-' + Math.random().toString(36).substring(2, 9);
-        document.body.appendChild(shadowHost);
+        shadowHost.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;z-index:2147483647;pointer-events:none;';
+        (document.documentElement || document.body).appendChild(shadowHost);
+        closedShadowRoot = shadowHost.attachShadow({ mode: 'closed' });
     }
-    return shadowHost.shadowRoot || shadowHost.attachShadow({ mode: 'open' });
+    return closedShadowRoot;
+}
+
+function cleanupShadowHostIfIdle() {
+    if (!currentButton && !currentPopup && shadowHost) {
+        shadowHost.remove();
+        shadowHost = null;
+        closedShadowRoot = null;
+    }
 }
 
 window.addEventListener("beforeunload", () => {
     if (shadowHost) {
         shadowHost.remove();
         shadowHost = null;
+        closedShadowRoot = null;
     }
 });
 
-function removeCurrentButton() {
+function removeCurrentButton(skipCleanup = false) {
     if (currentButton) {
         currentButton.remove();
         currentButton = null;
@@ -253,6 +240,9 @@ function removeCurrentButton() {
         clearTimeout(buttonHideTimeout);
         buttonHideTimeout = null;
     }
+    if (!skipCleanup) {
+        cleanupShadowHostIfIdle();
+    }
 }
 
 function closeCurrentPopup() {
@@ -260,11 +250,12 @@ function closeCurrentPopup() {
         currentPopup.remove();
         currentPopup = null;
     }
-    window.__geminiPopupOpen = false;
-    currentRequestId++; // Отменяем ожидающие ответы
+    currentRequestId++;
     currentAnchorRect = null;
     currentOriginalContext = '';
     currentLastAnswer = '';
+    currentLastScreenshot = null;
+    cleanupShadowHostIfIdle();
 }
 
 // ==================== АДАПТИВНАЯ МАСКИРОВКА И ПРОЗРАЧНОСТЬ ====================
@@ -280,13 +271,11 @@ function isPageBackgroundLight() {
             const b = parseInt(rgb[2], 10);
             return (r * 299 + g * 587 + b * 114) / 1000 > 128;
         }
-    } catch (e) {
-        console.debug('[Gemini Assistant] Не удалось определить цвет фона страницы:', e);
-    }
-    return true; // Большинство экзаменационных платформ имеют светлый фон
+    } catch (e) {}
+    return true;
 }
 
-let activeBaseOpacity = 0.35;
+let activeBaseOpacity = 0.45;
 
 function applyPopupStealthStyle(popup, savedOpacity, themeSetting) {
     if (!popup) return;
@@ -297,30 +286,28 @@ function applyPopupStealthStyle(popup, savedOpacity, themeSetting) {
     }
 
     const num = typeof savedOpacity === 'number' ? savedOpacity : 35;
-    const clamped = Math.max(10, Math.min(95, num));
+    const clamped = Math.max(15, Math.min(95, num));
     activeBaseOpacity = (clamped / 100);
 
-    // Управляем реальной прозрачностью контейнера
-    popup.style.opacity = activeBaseOpacity;
+    popup.style.opacity = String(activeBaseOpacity);
 
     if (isLight) {
-        popup.style.background = 'rgba(255, 255, 255, 0.48)';
+        popup.style.background = 'rgba(255, 255, 255, 0.72)';
         popup.style.color = '#1e293b';
-        popup.style.border = '1px solid rgba(0, 0, 0, 0.08)';
-        popup.style.boxShadow = '0 4px 16px rgba(0, 0, 0, 0.04)';
+        popup.style.border = '1px solid rgba(0, 0, 0, 0.12)';
+        popup.style.boxShadow = '0 4px 16px rgba(0, 0, 0, 0.08)';
     } else {
-        popup.style.background = 'rgba(16, 20, 26, 0.58)';
+        popup.style.background = 'rgba(16, 20, 26, 0.78)';
         popup.style.color = '#e2e8f0';
-        popup.style.border = '1px solid rgba(255, 255, 255, 0.10)';
-        popup.style.boxShadow = '0 4px 16px rgba(0, 0, 0, 0.18)';
+        popup.style.border = '1px solid rgba(255, 255, 255, 0.14)';
+        popup.style.boxShadow = '0 4px 16px rgba(0, 0, 0, 0.25)';
     }
 
-    // При наведении курсора — плавное проявление для чтения; при отводе — возврат в маскировку
     popup.onmouseenter = () => {
-        popup.style.opacity = Math.max(0.92, activeBaseOpacity);
+        popup.style.opacity = String(Math.max(0.94, activeBaseOpacity));
     };
     popup.onmouseleave = () => {
-        popup.style.opacity = activeBaseOpacity;
+        popup.style.opacity = String(activeBaseOpacity);
     };
 }
 
@@ -330,8 +317,9 @@ function createGeminiButton() {
     btn.style.cssText = `
         position: fixed; 
         z-index: 2147483646; 
-        background: rgba(120, 130, 145, 0.22);
-        color: rgba(230, 235, 245, 0.85); 
+        pointer-events: auto;
+        background: rgba(120, 130, 145, 0.28);
+        color: rgba(230, 235, 245, 0.9); 
         width: 22px; 
         height: 22px; 
         border-radius: 7px; 
@@ -339,26 +327,26 @@ function createGeminiButton() {
         align-items: center; 
         justify-content: center; 
         cursor: pointer; 
-        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
         backdrop-filter: blur(12px) saturate(130%);
         -webkit-backdrop-filter: blur(12px) saturate(130%);
         font-size: 11px; 
         user-select: none; 
-        opacity: 0.38;
-        border: 1px solid rgba(255, 255, 255, 0.16);
-        transition: opacity 0.22s ease, transform 0.2s ease, background 0.2s ease;
+        opacity: 0.55;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        transition: opacity 0.2s ease, transform 0.2s ease, background 0.2s ease;
     `;
     btn.innerText = '✦';
     btn.title = 'Помощник';
     btn.onmouseenter = () => { 
-        btn.style.opacity = '0.95'; 
+        btn.style.opacity = '0.98'; 
         btn.style.transform = 'scale(1.08)'; 
-        btn.style.background = 'rgba(120, 130, 145, 0.4)';
+        btn.style.background = 'rgba(120, 130, 145, 0.45)';
     };
     btn.onmouseleave = () => { 
-        btn.style.opacity = '0.38'; 
+        btn.style.opacity = '0.55'; 
         btn.style.transform = 'scale(1.0)'; 
-        btn.style.background = 'rgba(120, 130, 145, 0.22)';
+        btn.style.background = 'rgba(120, 130, 145, 0.28)';
     };
     return btn;
 }
@@ -371,17 +359,15 @@ function adjustPopupPosition(popup, anchorRect) {
     const vh = window.innerHeight;
     const margin = 8;
 
-    // Маленькое компактное поле (ширина ~285px, чтобы не привлекать внимание)
-    const popupWidth = Math.min(285, vw - margin * 2);
+    const popupWidth = Math.min(290, vw - margin * 2);
     popup.style.width = `${popupWidth}px`;
     popup.style.maxWidth = `${vw - margin * 2}px`;
-    popup.style.maxHeight = `${Math.min(240, vh - margin * 2)}px`;
+    popup.style.maxHeight = `${Math.min(245, vh - margin * 2)}px`;
 
     const rect = popup.getBoundingClientRect();
     const width = rect.width || popupWidth;
     const height = rect.height || 180;
 
-    // Горизонтальное выравнивание
     let left = anchorRect ? anchorRect.left : (vw - width) / 2;
     if (left + width > vw - margin) {
         left = vw - width - margin;
@@ -390,7 +376,6 @@ function adjustPopupPosition(popup, anchorRect) {
         left = margin;
     }
 
-    // Вертикальное выравнивание с приоритетом снизу/сверху
     let top;
     if (anchorRect) {
         const spaceBelow = vh - anchorRect.bottom - margin;
@@ -411,45 +396,45 @@ function adjustPopupPosition(popup, anchorRect) {
         top = (vh - height) / 2;
     }
 
-    // Жесткое ограничение в границах viewport
     top = Math.max(margin, Math.min(top, vh - height - margin));
 
     popup.style.left = `${Math.round(left)}px`;
     popup.style.top = `${Math.round(top)}px`;
 }
 
-// ==================== СОЗДАНИЕ POPUP ====================
-function createResponsePopup(selectedText, rect, surroundingContext = '') {
+// ==================== СОЗДАНИЕ POPUP (МГНОВЕННОЕ ОТКРЫТИЕ) ====================
+function createResponsePopup(selectedText, rect, surroundingContext = '', useAutoScreenshot = true) {
     closeCurrentPopup();
-    removeCurrentButton();
+    removeCurrentButton(true);
 
+    popupOpenedAt = Date.now();
     currentAnchorRect = rect;
     currentOriginalContext = (surroundingContext && surroundingContext.length > selectedText.length) 
         ? surroundingContext 
         : (selectedText || '');
+    currentLastScreenshot = null;
     const thisRequestId = ++currentRequestId;
 
-    const shadow = getShadowContainer();
+    const shadow = ensureShadowRoot();
 
-    // Стили компонента внутри Shadow DOM (компактное, неброское окно со скроллом)
     const styleEl = document.createElement('style');
     styleEl.textContent = `
         @keyframes geminiStealthEntrance {
-            0% {
-                transform: translateY(5px) scale(0.98);
-            }
-            100% {
-                transform: translateY(0) scale(1);
-            }
+            0% { transform: translateY(5px) scale(0.98); }
+            100% { transform: translateY(0) scale(1); }
         }
-
         .gemini-popup-root {
             position: fixed;
             z-index: 2147483647;
+            pointer-events: auto;
             display: flex;
             flex-direction: column;
             box-sizing: border-box;
             border-radius: 9px;
+            background: rgba(255, 255, 255, 0.85);
+            color: #1e293b;
+            border: 1px solid rgba(0, 0, 0, 0.12);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
             backdrop-filter: blur(16px) saturate(115%);
             -webkit-backdrop-filter: blur(16px) saturate(115%);
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -457,29 +442,27 @@ function createResponsePopup(selectedText, rect, surroundingContext = '') {
             line-height: 1.38;
             overflow: hidden;
             user-select: text;
-            animation: geminiStealthEntrance 0.18s cubic-bezier(0.16, 1, 0.3, 1) ease-out;
+            opacity: 0.75;
+            animation: geminiStealthEntrance 0.18s cubic-bezier(0.16, 1, 0.3, 1);
             transition: opacity 0.22s ease, transform 0.18s ease, background 0.22s ease;
         }
-
         .gemini-popup-header {
             flex: 0 0 auto;
             display: flex;
             align-items: center;
             padding: 4px 8px;
-            border-bottom: 1px solid rgba(128, 128, 140, 0.08);
+            border-bottom: 1px solid rgba(128, 128, 140, 0.12);
             user-select: none;
             position: relative;
         }
-
         .gemini-title {
             font-weight: 500;
             font-size: 10.5px;
-            opacity: 0.65;
+            opacity: 0.75;
             display: flex;
             align-items: center;
             letter-spacing: 0.2px;
         }
-
         .gemini-model-badge {
             font-size: 8.5px;
             font-weight: 500;
@@ -487,21 +470,20 @@ function createResponsePopup(selectedText, rect, surroundingContext = '') {
             border-radius: 6px;
             margin-left: auto;
             margin-right: 20px;
-            background: rgba(128, 128, 140, 0.08);
+            background: rgba(128, 128, 140, 0.1);
             color: inherit;
-            opacity: 0.65;
-            border: 1px solid rgba(128, 128, 140, 0.12);
+            opacity: 0.75;
+            border: 1px solid rgba(128, 128, 140, 0.15);
             white-space: nowrap;
         }
-
         .gemini-close-btn {
             position: absolute;
             right: 5px;
             top: 4px;
             background: none;
             border: none;
-            color: rgba(140, 145, 155, 0.45);
-            font-size: 11px;
+            color: rgba(140, 145, 155, 0.65);
+            font-size: 12px;
             cursor: pointer;
             width: 16px;
             height: 16px;
@@ -509,106 +491,75 @@ function createResponsePopup(selectedText, rect, surroundingContext = '') {
             align-items: center;
             justify-content: center;
             border-radius: 4px;
-            transition: color 0.15s, background 0.15s;
         }
-
         .gemini-close-btn:hover {
             color: #ef4444;
-            background: rgba(239, 68, 68, 0.08);
+            background: rgba(239, 68, 68, 0.1);
         }
-
         .gemini-popup-body {
             flex: 1 1 auto;
             min-height: 38px;
-            max-height: 140px;
+            max-height: 145px;
             overflow-y: auto;
             overflow-x: hidden;
             padding: 6px 9px;
             box-sizing: border-box;
             overscroll-behavior: contain;
-            opacity: 0.92;
         }
-
-        .gemini-popup-body::-webkit-scrollbar {
-            width: 2.5px;
-        }
+        .gemini-popup-body::-webkit-scrollbar { width: 2.5px; }
         .gemini-popup-body::-webkit-scrollbar-thumb {
-            background: rgba(128, 128, 140, 0.18);
+            background: rgba(128, 128, 140, 0.25);
             border-radius: 3px;
         }
-        .gemini-popup-body::-webkit-scrollbar-thumb:hover {
-            background: rgba(128, 128, 140, 0.35);
-        }
-
         .gemini-popup-footer {
             flex: 0 0 auto;
             padding: 4px 7px;
-            border-top: 1px solid rgba(128, 128, 140, 0.08);
+            border-top: 1px solid rgba(128, 128, 140, 0.12);
             display: flex;
             flex-direction: column;
             gap: 4px;
-            background: rgba(128, 128, 140, 0.02);
+            background: rgba(128, 128, 140, 0.03);
         }
-
         .gemini-input-row {
             display: flex;
             align-items: center;
             gap: 4px;
         }
-
         .gemini-query-input {
             flex: 1 1 auto;
             height: 22px;
             padding: 1px 6px;
             border-radius: 5px;
-            border: 1px solid rgba(128, 128, 140, 0.14);
-            background: rgba(128, 128, 140, 0.05);
+            border: 1px solid rgba(128, 128, 140, 0.18);
+            background: rgba(128, 128, 140, 0.06);
             color: inherit;
             font-size: 10.5px;
             outline: none;
             box-sizing: border-box;
-            transition: border-color 0.15s, background 0.15s;
         }
-
-        .gemini-query-input:focus {
-            border-color: rgba(128, 128, 140, 0.35);
-            background: rgba(128, 128, 140, 0.08);
-        }
-
         .gemini-send-btn {
             flex: 0 0 auto;
             height: 22px;
             padding: 0 7px;
-            background: rgba(128, 128, 140, 0.14);
-            border: 1px solid rgba(128, 128, 140, 0.18);
+            background: rgba(128, 128, 140, 0.16);
+            border: 1px solid rgba(128, 128, 140, 0.22);
             color: inherit;
             border-radius: 5px;
             cursor: pointer;
             font-size: 11px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: background 0.15s, border-color 0.15s;
         }
-
-        .gemini-send-btn:hover {
-            background: rgba(128, 128, 140, 0.24);
-            border-color: rgba(128, 128, 140, 0.3);
-        }
-
         .gemini-actions-row {
             display: flex;
             align-items: center;
             justify-content: space-between;
             gap: 5px;
         }
-
         .gemini-action-btn {
             height: 20px;
             padding: 0 6px;
             border-radius: 5px;
-            border: 1px solid rgba(128, 128, 140, 0.12);
-            background: rgba(128, 128, 140, 0.06);
+            border: 1px solid rgba(128, 128, 140, 0.16);
+            background: rgba(128, 128, 140, 0.08);
             color: inherit;
             font-size: 10px;
             font-weight: 500;
@@ -617,112 +568,37 @@ function createResponsePopup(selectedText, rect, surroundingContext = '') {
             align-items: center;
             gap: 3px;
             user-select: none;
-            transition: all 0.15s;
         }
-
-        .gemini-action-btn:hover {
-            background: rgba(128, 128, 140, 0.14);
-            border-color: rgba(128, 128, 140, 0.22);
-        }
-
-        /* Компактный итоговый вердикт проверки (без эмодзи и ярких пятен) */
         .gemini-check-compact {
             margin-top: 4px;
             padding: 4px 7px;
             border-radius: 5px;
-            border: 1px solid rgba(128, 128, 140, 0.14);
-            background: rgba(128, 128, 140, 0.04);
+            border: 1px solid rgba(128, 128, 140, 0.16);
+            background: rgba(128, 128, 140, 0.05);
             font-size: 10.5px;
             font-weight: 500;
         }
-
-        .gemini-check-compact.error {
-            border-color: rgba(128, 128, 140, 0.20);
-            background: rgba(128, 128, 140, 0.06);
-        }
-
         .gemini-check-sub {
             font-size: 8.5px;
             font-weight: normal;
-            opacity: 0.45;
+            opacity: 0.5;
             margin-top: 2px;
         }
-
-        /* Таблицы Markdown */
-        .gemini-table-wrap {
-            width: 100%;
-            overflow-x: auto;
-            margin: 6px 0;
-            border-radius: 5px;
-            border: 1px solid rgba(128, 128, 140, 0.18);
-        }
-        .gemini-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 11px;
-            text-align: left;
-        }
-        .gemini-table th, .gemini-table td {
-            padding: 4px 6px;
-            border: 1px solid rgba(128, 128, 140, 0.15);
-        }
-        .gemini-table th {
-            background: rgba(128, 128, 140, 0.08);
-            font-weight: 600;
-        }
-
-        /* Блоки кода */
-        .gemini-code-block {
-            background: rgba(0, 0, 0, 0.2);
-            padding: 6px 8px;
-            border-radius: 6px;
-            overflow-x: auto;
-            font-family: ui-monospace, monospace;
-            font-size: 11px;
-            line-height: 1.35;
-            margin: 5px 0;
-            border: 1px solid rgba(128, 128, 140, 0.16);
-        }
-        .gemini-inline-code {
-            background: rgba(128, 128, 140, 0.14);
-            padding: 1px 4px;
-            border-radius: 3px;
-            font-family: ui-monospace, monospace;
-            font-size: 11px;
-        }
-
-        .gemini-quote {
-            margin: 5px 0;
-            padding: 4px 8px;
-            border-left: 2px solid rgba(96, 165, 250, 0.5);
-            background: rgba(96, 165, 250, 0.06);
-            border-radius: 0 4px 4px 0;
-        }
-
-        .gemini-ul, .gemini-ol {
-            margin: 4px 0;
-            padding-left: 16px;
-        }
-        .gemini-ul li, .gemini-ol li {
-            margin-bottom: 2px;
-        }
-        .gemini-p {
-            margin: 3px 0;
-        }
-        .gemini-h2, .gemini-h3, .gemini-h4, .gemini-h5, .gemini-h6 {
-            margin: 6px 0 3px 0;
-            font-weight: 600;
-            font-size: 12px;
-        }
+        .gemini-table-wrap { width: 100%; overflow-x: auto; margin: 6px 0; border-radius: 5px; border: 1px solid rgba(128, 128, 140, 0.18); }
+        .gemini-table { width: 100%; border-collapse: collapse; font-size: 11px; text-align: left; }
+        .gemini-table th, .gemini-table td { padding: 4px 6px; border: 1px solid rgba(128, 128, 140, 0.15); }
+        .gemini-code-block { background: rgba(0, 0, 0, 0.2); padding: 6px 8px; border-radius: 6px; overflow-x: auto; font-family: ui-monospace, monospace; font-size: 11px; margin: 5px 0; }
+        .gemini-inline-code { background: rgba(128, 128, 140, 0.14); padding: 1px 4px; border-radius: 3px; font-family: ui-monospace, monospace; }
+        .gemini-quote { margin: 5px 0; padding: 4px 8px; border-left: 2px solid rgba(96, 165, 250, 0.5); background: rgba(96, 165, 250, 0.06); }
+        .gemini-ul, .gemini-ol { margin: 4px 0; padding-left: 16px; }
+        .gemini-p { margin: 3px 0; }
+        .gemini-h2, .gemini-h3, .gemini-h4, .gemini-h5, .gemini-h6 { margin: 6px 0 3px 0; font-weight: 600; font-size: 12px; }
     `;
 
     const popup = document.createElement('div');
     popup.className = 'gemini-popup-root';
     currentPopup = popup;
 
-    window.__geminiPopupOpen = true;
-
-    // Header
     const header = document.createElement('div');
     header.className = 'gemini-popup-header';
 
@@ -748,13 +624,12 @@ function createResponsePopup(selectedText, rect, surroundingContext = '') {
     header.appendChild(closeBtn);
     popup.appendChild(header);
 
-    // Body
     const body = document.createElement('div');
     body.className = 'gemini-popup-body';
 
     const responseContent = document.createElement('div');
     responseContent.className = 'gemini-response-content';
-    responseContent.innerHTML = `<span style="opacity: 0.65;">Поиск решения...</span>`;
+    responseContent.innerHTML = `<span style="opacity: 0.7;">Поиск задания на экране...</span>`;
     body.appendChild(responseContent);
 
     const verificationArea = document.createElement('div');
@@ -764,7 +639,6 @@ function createResponsePopup(selectedText, rect, surroundingContext = '') {
 
     popup.appendChild(body);
 
-    // Footer
     const footer = document.createElement('div');
     footer.className = 'gemini-popup-footer';
 
@@ -804,31 +678,36 @@ function createResponsePopup(selectedText, rect, surroundingContext = '') {
 
     popup.appendChild(footer);
 
-    shadow.appendChild(styleEl);
+    if (!shadow.getElementById('gemini-popup-styles')) {
+        styleEl.id = 'gemini-popup-styles';
+        shadow.appendChild(styleEl);
+    }
     shadow.appendChild(popup);
 
-    // Первичное позиционирование
     adjustPopupPosition(popup, currentAnchorRect);
 
-    // ==================== ВЫПОЛНЕНИЕ ЗАПРОСОВ ====================
-    safeGetStorageSync(['geminiApiKey', 'theme', 'modelMode', 'windowOpacity'], (data) => {
-        const apiKey = data.geminiApiKey;
-        let modelMode = data.modelMode || 'auto-flash';
-        if (modelMode === 'auto') modelMode = 'auto-flash';
+    safeGetStorageSync(['geminiApiKey', 'geminiApiKeys', 'groqApiKey', 'providerMode', 'theme', 'windowOpacity'], (data) => {
+        if (thisRequestId !== currentRequestId || !currentPopup) return;
 
-        // Применяем маскировку и прозрачность
+        const storedKeys = Array.isArray(data.geminiApiKeys) ? data.geminiApiKeys.filter(Boolean) : [];
+        if (storedKeys.length === 0 && data.geminiApiKey) {
+            storedKeys.push(data.geminiApiKey);
+        }
+        const groqKey = (data.groqApiKey || '').trim();
+        const providerMode = data.providerMode || 'auto-hybrid';
+
         applyPopupStealthStyle(popup, data.windowOpacity, data.theme);
 
-        if (!apiKey) {
+        if (storedKeys.length === 0 && !groqKey) {
             modelBadge.innerText = 'Ключ';
-            responseContent.innerHTML = `<span style="opacity:0.8;">Укажите API-ключ в настройках.</span>`;
+            responseContent.innerHTML = `<span style="opacity:0.85;">Укажите API-ключ Gemini или Groq в настройках.</span>`;
             return;
         }
 
         function executeAiRequest(promptText, imageBase64, reqId, isScreenshot = false) {
-            if (reqId !== currentRequestId) return;
+            if (reqId !== currentRequestId || !currentPopup) return;
 
-            responseContent.innerHTML = `<span style="opacity: 0.65;">${isScreenshot ? 'Анализ снимка...' : 'Поиск решения...'}</span>`;
+            responseContent.innerHTML = `<span style="opacity: 0.7;">${isScreenshot ? 'Анализ скриншота...' : 'Поиск решения...'}</span>`;
             verificationArea.style.display = 'none';
             checkBtn.style.display = 'none';
             modelBadge.innerText = '...';
@@ -838,28 +717,26 @@ function createResponsePopup(selectedText, rect, surroundingContext = '') {
                 chrome.runtime.sendMessage(
                     {
                         action: "askGemini",
-                        apiKey: apiKey,
+                        apiKeys: storedKeys,
+                        apiKey: storedKeys[0] || '',
+                        groqApiKey: groqKey,
+                        providerMode: providerMode,
                         prompt: promptText,
-                        image: imageBase64,
-                        modelMode: modelMode
+                        image: imageBase64
                     },
                     (response) => {
                         if (chrome.runtime?.lastError) {
-                            const lastErr = chrome.runtime.lastError;
-                            if (!lastErr.message?.includes('context invalidated')) {
-                                console.warn('[Gemini Assistant] Ошибка sendMessage (askGemini):', lastErr);
+                            if (reqId === currentRequestId) {
+                                modelBadge.innerText = 'Ошибка';
+                                responseContent.innerHTML = `<span style="opacity:0.8; font-size:10.5px;">Обновите страницу (F5).</span>`;
                             }
                             return;
                         }
-
-                        // Защита от устаревших ответов
-                        if (reqId !== currentRequestId) {
-                            return;
-                        }
+                        if (reqId !== currentRequestId || !currentPopup) return;
 
                         if (response?.error) {
                             modelBadge.innerText = 'Ошибка';
-                            responseContent.innerHTML = `<span style="opacity:0.75; font-size:10.5px;">${escapeHtml(response.message || 'Ошибка запроса')}</span>`;
+                            responseContent.innerHTML = `<span style="opacity:0.8; font-size:10.5px;">${escapeHtml(response.message || 'Ошибка запроса')}</span>`;
                             adjustPopupPosition(popup, currentAnchorRect);
                         } else if (response?.answer) {
                             currentLastAnswer = response.answer;
@@ -868,7 +745,7 @@ function createResponsePopup(selectedText, rect, surroundingContext = '') {
                             } else if (response.model) {
                                 modelBadge.innerText = response.model.replace("gemini-", "");
                             } else {
-                                modelBadge.innerText = "Flash";
+                                modelBadge.innerText = "OK";
                             }
 
                             responseContent.innerHTML = renderMarkdown(response.answer);
@@ -880,31 +757,72 @@ function createResponsePopup(selectedText, rect, surroundingContext = '') {
                         }
                     }
                 );
-            } catch (err) {
-                if (!err?.message?.includes('context invalidated')) {
-                    console.error('[Gemini Assistant] Исключение при отправке askGemini:', err);
-                }
-            }
+            } catch (err) {}
         }
 
-        // Инструкция для решения задания ученику 8 класса
         let taskContext = selectedText;
         if (currentOriginalContext && currentOriginalContext !== selectedText) {
             taskContext = `${selectedText}\nКонтекст со страницы: "${currentOriginalContext}"`;
         }
 
-        const studentInstruction = `Задание для ученика 8 класса:
+        // Усиленный промпт: объясняет модели, что на тестах вопрос может быть картинкой,
+        // а выделенный текст — это просто кнопка ("Далее", "Назад", номер вопроса),
+        // поэтому нужно НАЙТИ само задание на скриншоте и решить его!
+        const buildPrompt = (withShot) => withShot
+            ? `ВАЖНАЯ ОСОБЕННОСТЬ ТЕСТА:
+На этой странице стоит защита от выделения текста, и сам вопрос/задание размещён ВНУТРИ КАРТИНКИ (изображения) на скриншоте!
+Пользователь смог выделить мышкой только служебный элемент интерфейса рядом (например, кнопку "Далее", "Предыдущий", "Next", "Previous", номер вопроса или случайное слово):
+"${taskContext}"
+
+ТВОЯ ГЛАВНАЯ ЗАДАЧА:
+1. НЕ пытайся отвечать на выделенное служебное слово вроде "Далее" или номер вопроса — это просто ориентир того, что пользователь запустил помощника на этом экране!
+2. Внимательно осмотри ВЕСЬ прикреплённый скриншот: найди на нём картинку/блок с текстом самого задания, вопроса, предложения с пропуском, текста для чтения или схемы, а также все варианты ответа (A, B, C, D или поля ввода).
+3. Если выделенный текст всё же является частью самого вопроса — учитывай и его, и картинку на скриншоте вместе.
+4. Тщательно реши найденное на скриншоте задание и перепроверь ответ.
+5. Если это тест с вариантами ответа — укажи ТОЧНУЮ букву/номер и текст верного варианта.
+6. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать шаблоны в скобках [ ], плейсхолдеры вроде "[Укажи ответ]" или советы "внимательно прочитай условие".
+7. На первой строке напиши: **Ответ: [точный ответ или верный вариант]**.
+8. Ниже напиши 1-2 строки краткого понятного объяснения.
+9. Строго БЕЗ эмодзи. Без $ и LaTeX, используй символы: ×, :, √, ², ³, °, ->.`
+            : `Задание:
 "${taskContext}"
 
 ОБЯЗАТЕЛЬНЫЕ ТРЕБОВАНИЯ:
-1. Ты обязан САМ РЕШИТЬ задачу и дать готовый результат.
+1. Ты обязан САМ РЕШИТЬ задачу, тщательно перепроверить решение и дать готовый точный результат.
 2. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать шаблоны в скобках [ ], плейсхолдеры вроде "[Укажи ответ]" или давать общие советы вроде "внимательно прочитай условие задачи".
 3. СРАЗУ на первой строке напиши готовый найденный ответ: **Ответ: [конкретный ответ или выбранный вариант]** (вместо слов в скобках пиши сам найденный ответ).
 4. Ниже напиши 1-2 строки понятного решения.
 5. Строго БЕЗ эмодзи. Без $ и LaTeX, используй символы: ×, :, √, ², ³, °, ->.`;
-        executeAiRequest(studentInstruction, null, thisRequestId);
 
-        // Обработка отправки уточняющего вопроса
+        // Даём 800 мс на захват скриншота экрана, чтобы вопрос-картинка гарантированно попал в запрос
+        if (useAutoScreenshot) {
+            let started = false;
+            const startOnce = (shot) => {
+                if (started || thisRequestId !== currentRequestId) return;
+                started = true;
+                currentLastScreenshot = shot;
+                executeAiRequest(buildPrompt(Boolean(shot)), shot, thisRequestId, Boolean(shot));
+            };
+
+            const fallbackTimer = setTimeout(() => startOnce(null), 800);
+
+            try {
+                chrome.runtime.sendMessage({ action: "captureTab" }, (res) => {
+                    clearTimeout(fallbackTimer);
+                    if (chrome.runtime?.lastError || res?.error || !res?.image) {
+                        startOnce(null);
+                    } else {
+                        startOnce(res.image);
+                    }
+                });
+            } catch (e) {
+                clearTimeout(fallbackTimer);
+                startOnce(null);
+            }
+        } else {
+            executeAiRequest(buildPrompt(false), null, thisRequestId, false);
+        }
+
         function handleUserSubmit() {
             const userQ = queryInput.value.trim();
             if (!userQ) return;
@@ -913,17 +831,18 @@ function createResponsePopup(selectedText, rect, surroundingContext = '') {
             sendBtn.disabled = true;
             sendBtn.innerText = '...';
 
-            let fullPrompt = `Ученик 8 класса задает вопрос.\n`;
+            let fullPrompt = `Ученик задает уточняющий вопрос по заданию со скриншота.\n`;
             if (currentOriginalContext) {
-                fullPrompt += `Предыдущий контекст задания: "${currentOriginalContext}"\n`;
+                fullPrompt += `Выделенный ориентир: "${currentOriginalContext}"\n`;
             }
             if (currentLastAnswer) {
                 fullPrompt += `Предыдущий ответ помощника: "${currentLastAnswer}"\n`;
             }
-            fullPrompt += `Последний вопрос ученика: "${userQ}"\n`;
-            fullPrompt += `Дай спокойный, понятный и краткий ответ для ученика 8 класса без лишней воды и без LaTeX/$.`;
+            fullPrompt += `Вопрос пользователя: "${userQ}"\n`;
+            fullPrompt += `Дай точный, понятный и краткий ответ без лишней воды и без LaTeX/$.`;
 
-            executeAiRequest(fullPrompt, null, nextReqId);
+            // Передаём также сохранённый скриншот, если вопрос касается картинки на экране
+            executeAiRequest(fullPrompt, currentLastScreenshot, nextReqId, Boolean(currentLastScreenshot));
 
             queryInput.value = '';
             sendBtn.disabled = false;
@@ -942,7 +861,6 @@ function createResponsePopup(selectedText, rect, surroundingContext = '') {
             }
         };
 
-        // Обработка скриншота (Flow: кнопка Снимок -> скрыть popup -> captureVisibleTab -> вернуть popup -> отправить изображение Gemini -> получить ответ)
         screenshotBtn.onclick = (e) => {
             e.stopPropagation();
             if (!currentPopup) return;
@@ -950,63 +868,45 @@ function createResponsePopup(selectedText, rect, surroundingContext = '') {
             const nextReqId = ++currentRequestId;
             const typedText = queryInput.value.trim();
 
-            // 1. Скрыть popup
             currentPopup.style.display = 'none';
 
-            // 2. Подождать перерисовки экрана и захватить вкладку
             requestAnimationFrame(() => {
                 setTimeout(() => {
                     try {
                         chrome.runtime.sendMessage({ action: "captureTab" }, (res) => {
-                            if (chrome.runtime?.lastError) {
-                                const lastErr = chrome.runtime.lastError;
-                                if (!lastErr.message?.includes('context invalidated')) {
-                                    console.warn('[Gemini Assistant] Ошибка captureTab:', lastErr);
-                                }
-                                return;
-                            }
-
-                            // 3. Вернуть popup
                             if (!currentPopup) return;
                             currentPopup.style.display = 'flex';
                             adjustPopupPosition(currentPopup, currentAnchorRect);
 
                             if (nextReqId !== currentRequestId) return;
 
-                            if (res?.error || !res?.image) {
-                                responseContent.innerHTML = `<span style="opacity:0.75; font-size:10.5px;">${escapeHtml(res?.message || 'Снимок экрана не удался.')}</span>`;
-                                adjustPopupPosition(currentPopup, currentAnchorRect);
+                            if (chrome.runtime?.lastError || res?.error || !res?.image) {
+                                responseContent.innerHTML = `<span style="opacity:0.8; font-size:10.5px;">${escapeHtml(res?.message || 'Снимок экрана не удался.')}</span>`;
+                                adjustPopupPosition(popup, currentAnchorRect);
                                 return;
                             }
 
-                            // 4. Отправить изображение Gemini одновременно с последним вопросом и контекстом
-                            let prompt = `Задание со скриншота для ученика 8 класса.\n`;
+                            let prompt = `На скриншоте изображён тест, где вопрос может быть оформлен в виде картинки.\n`;
                             if (currentOriginalContext) {
-                                prompt += `Предыдущий контекст задания: "${currentOriginalContext}"\n`;
-                            }
-                            if (currentLastAnswer) {
-                                prompt += `Предыдущий ответ: "${currentLastAnswer}"\n`;
+                                prompt += `Выделенный ориентир на странице: "${currentOriginalContext}"\n`;
                             }
                             if (typedText) {
-                                prompt += `Последний вопрос ученика: "${typedText}"\n`;
+                                prompt += `Вопрос пользователя: "${typedText}"\n`;
                             } else {
-                                prompt += `Последний вопрос ученика: "Реши задание на скриншоте. Ты обязан сам дать готовый точный ответ. На первой строке напиши: **Ответ: [готовый ответ]**, затем дай 1-2 строки краткого хода решения. Запрещено писать шаблоны в скобках или общие советы вроде 'прочитай условие'."\n`;
+                                prompt += `Найди активное задание/вопрос на скриншоте (в том числе текст внутри картинки), реши его и напиши на первой строке: **Ответ: [точный ответ или верный вариант]**, затем 1-2 строки краткого объяснения. Без шаблонов в скобках.`;
                             }
-                            prompt += `Ответь спокойно и понятно для ученика 8 класса, без лишней воды и без LaTeX/$.`;
 
+                            currentLastScreenshot = res.image;
                             executeAiRequest(prompt, res.image, nextReqId, true);
                             queryInput.value = '';
                         });
                     } catch (err) {
-                        if (!err?.message?.includes('context invalidated')) {
-                            console.error('[Gemini Assistant] Исключение при отправке captureTab:', err);
-                        }
+                        if (currentPopup) currentPopup.style.display = 'flex';
                     }
                 }, 80);
             });
         };
 
-        // Обработка кнопки "Проверить ответ" (ТОЛЬКО краткий итоговый вердикт и верный ответ без эмодзи)
         checkBtn.onclick = (e) => {
             e.stopPropagation();
             if (!currentLastAnswer) return;
@@ -1024,35 +924,31 @@ function createResponsePopup(selectedText, rect, surroundingContext = '') {
             body.scrollTop = body.scrollHeight;
             adjustPopupPosition(popup, currentAnchorRect);
 
-            const verifyPrompt = `Ученик 8 класса просит проверить ответ к заданию.
-Контекст задания: "${currentOriginalContext || 'Задание со скриншота'}".
+            const verifyPrompt = `Проверь ответ к заданию на скриншоте (учитывай, что сам вопрос может быть внутри картинки на скриншоте).
+Выделенный ориентир: "${currentOriginalContext || 'Задание со скриншота'}".
 Проверяемый ответ: "${currentLastAnswer}".
-Вопрос: Правильно ли решено задание?
 Напиши ТОЛЬКО краткий итоговый вердикт (максимум 1-2 строки):
 Верно. Ответ: [ответ]
 или
 Ошибка. Правильный ответ: [ответ]
-Строго БЕЗ каких-либо эмодзи, галочек и крестиков. Спокойно, без лишней воды.`;
+Строго БЕЗ эмодзи.`;
 
             try {
                 chrome.runtime.sendMessage(
                     {
                         action: "askGemini",
-                        apiKey: apiKey,
+                        apiKeys: storedKeys,
+                        apiKey: storedKeys[0] || '',
+                        groqApiKey: groqKey,
+                        providerMode: providerMode,
                         prompt: verifyPrompt,
-                        modelMode: "smart-verify",
+                        image: currentLastScreenshot,
                         isVerification: true
                     },
                     (res) => {
-                        if (chrome.runtime?.lastError) {
-                            const lastErr = chrome.runtime.lastError;
-                            if (!lastErr.message?.includes('context invalidated')) {
-                                console.warn('[Gemini Assistant] Ошибка sendMessage (verify):', lastErr);
-                            }
-                            return;
-                        }
-
+                        if (chrome.runtime?.lastError) return;
                         if (checkReqId !== currentRequestId) return;
+
                         checkBtn.disabled = false;
                         checkBtn.innerText = 'Сверено';
 
@@ -1067,7 +963,7 @@ function createResponsePopup(selectedText, rect, surroundingContext = '') {
                             verificationArea.innerHTML = `
                                 <div class="gemini-check-compact ${isError ? 'error' : ''}">
                                     <div>${renderMarkdown(res.answer)}</div>
-                                    <div class="gemini-check-sub">ИИ-проверка (без 100% гарантии)</div>
+                                    <div class="gemini-check-sub">Проверка (${escapeHtml(res.modelDisplayName || 'ИИ')})</div>
                                 </div>
                             `;
                         }
@@ -1075,17 +971,12 @@ function createResponsePopup(selectedText, rect, surroundingContext = '') {
                         adjustPopupPosition(popup, currentAnchorRect);
                     }
                 );
-            } catch (err) {
-                if (!err?.message?.includes('context invalidated')) {
-                    console.error('[Gemini Assistant] Исключение при отправке askGemini (verify):', err);
-                }
-            }
+            } catch (err) {}
         };
     });
 }
 
 // ==================== УПРАВЛЕНИЕ ЖИЗНЕННЫМ ЦИКЛОМ СОБЫТИЙ ====================
-// Мгновенное применение прозрачности и темы к открытому окну при изменении в меню
 if (typeof chrome !== 'undefined' && chrome?.storage?.onChanged?.addListener) {
     try {
         chrome.storage.onChanged.addListener((changes, area) => {
@@ -1095,41 +986,32 @@ if (typeof chrome !== 'undefined' && chrome?.storage?.onChanged?.addListener) {
                 });
             }
         });
-    } catch (err) {
-        if (!err?.message?.includes('context invalidated')) {
-            console.error('[Gemini Assistant] Ошибка регистрации storage.onChanged:', err);
-        }
-    }
+    } catch (err) {}
 }
 
-// Перерасчет позиции при изменении размера окна
 window.addEventListener('resize', () => {
     if (currentPopup) {
         adjustPopupPosition(currentPopup, currentAnchorRect);
     }
 });
 
-// ЕДИНСТВЕННЫЙ обработчик кликов для закрытия при клике вне popup (Requirement 5)
+// Закрытие при клике вне popup/кнопки
 document.addEventListener('pointerdown', (e) => {
     const path = e.composedPath ? e.composedPath() : [];
+    if (shadowHost && path.includes(shadowHost)) return;
+    if (currentPopup && path.includes(currentPopup)) return;
+    if (currentButton && path.includes(currentButton)) return;
 
-    // Клик внутри popup НЕ закрывает его (текст, скроллбар, кнопки, ввод, скриншот, проверка)
-    if (currentPopup && path.includes(currentPopup)) {
-        return;
-    }
-
-    // Если popup открыт и клик произошел вне его — сразу закрыть
-    if (currentPopup) {
+    if (currentPopup && (Date.now() - popupOpenedAt > 250)) {
         closeCurrentPopup();
     }
 
-    // Закрытие кнопки выделения при клике вне её
-    if (currentButton && !path.includes(currentButton)) {
+    if (currentButton) {
         removeCurrentButton();
     }
 }, true);
 
-// Быстрое скрытие ТОЛЬКО по Alt+Q (режим мгновенной скрытности)
+// Быстрое скрытие ТОЛЬКО по Alt+Q
 document.addEventListener('keydown', (e) => {
     if (e.altKey && (e.code === 'KeyQ' || e.key === 'q' || e.key === 'Q' || e.key === 'й' || e.key === 'Й')) {
         if (currentPopup) {
@@ -1147,16 +1029,17 @@ window.addEventListener('message', (e) => {
     }
 });
 
-// Появление кнопки при выделении текста (проверяем assistantEnabled)
+// Появление кнопки при выделении текста
 document.addEventListener('mouseup', (e) => {
     if (!isExtensionValid()) return;
+
+    const path = e.composedPath ? e.composedPath() : [];
+    if (shadowHost && path.includes(shadowHost)) return;
+    if (currentPopup && path.includes(currentPopup)) return;
 
     safeGetStorageSync(['assistantEnabled', 'isEnabled'], (data) => {
         const isAssistantActive = data.assistantEnabled !== undefined ? data.assistantEnabled : (data.isEnabled !== false);
         if (!isAssistantActive) return;
-
-        const path = e.composedPath ? e.composedPath() : [];
-        if (currentPopup && path.includes(currentPopup)) return;
 
         if (timeoutId) clearTimeout(timeoutId);
 
@@ -1165,7 +1048,7 @@ document.addEventListener('mouseup', (e) => {
             const selectedText = selection ? selection.toString().trim() : '';
             if (!selectedText || selectedText.length < 1) return;
 
-            removeCurrentButton();
+            removeCurrentButton(true);
 
             try {
                 if (!selection.rangeCount) return;
@@ -1179,15 +1062,13 @@ document.addEventListener('mouseup', (e) => {
                 }
 
                 currentButton = createGeminiButton();
-                getShadowContainer().appendChild(currentButton);
+                ensureShadowRoot().appendChild(currentButton);
 
-                // Позиционируем кнопку рядом с выделением (надежно даже для 1-2 символов)
                 const btnLeft = Math.min(window.innerWidth - 30, Math.max(6, (rect.right || e.clientX) + 4));
                 const btnTop = (rect.top > 30) ? (rect.top - 26) : Math.min(window.innerHeight - 30, Math.max(6, (rect.bottom || e.clientY) + 6));
                 currentButton.style.left = `${Math.round(btnLeft)}px`;
                 currentButton.style.top = `${Math.round(btnTop)}px`;
 
-                // Если выделен короткий фрагмент (например, 1-2 слова или номер), извлекаем родительский блок для контекста задачи
                 let surroundingText = '';
                 try {
                     const container = range.commonAncestorContainer;
@@ -1198,23 +1079,21 @@ document.addEventListener('mouseup', (e) => {
                             surroundingText = pText;
                         }
                     }
-                } catch (e) {
-                    console.debug('[Gemini Assistant] Не удалось получить окружающий контекст:', e);
-                }
+                } catch (e) {}
 
-                currentButton.onclick = (ev) => {
+                const openHandler = (ev) => {
+                    ev.preventDefault();
                     ev.stopPropagation();
-                    createResponsePopup(selectedText, rect, surroundingText);
-                    removeCurrentButton();
+                    createResponsePopup(selectedText, rect, surroundingText, true);
                 };
+
+                currentButton.onpointerdown = openHandler;
+                currentButton.onclick = openHandler;
 
                 buttonHideTimeout = setTimeout(() => {
                     removeCurrentButton();
                 }, 10000);
-            } catch (err) {
-                console.error('[Gemini Assistant] Ошибка отображения кнопки помощника:', err);
-            }
-        }, 150);
+            } catch (err) {}
+        }, 120);
     });
 });
-

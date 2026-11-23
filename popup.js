@@ -3,9 +3,13 @@ const assistantCheckbox = document.getElementById('assistant-active');
 const bypassCheckbox = document.getElementById('bypass-active');
 const opacitySlider = document.getElementById('opacity-slider');
 const opacityVal = document.getElementById('opacity-val');
-const modelModeSelect = document.getElementById('model-mode');
+const providerModeSelect = document.getElementById('provider-mode');
 const saveBtn = document.getElementById('save');
-const apiKeyInput = document.getElementById('apiKey');
+
+const groqApiKeyInput = document.getElementById('groqApiKey');
+const apiKeyInput1 = document.getElementById('apiKey1');
+const apiKeyInput2 = document.getElementById('apiKey2');
+const apiKeyInput3 = document.getElementById('apiKey3');
 const statusDiv = document.getElementById('status');
 
 function updateThemeUI(isLight) {
@@ -18,7 +22,6 @@ function updateThemeUI(isLight) {
     }
 }
 
-// Обновление индикатора слайдера прозрачности с мгновенным сохранением в storage
 if (opacitySlider && opacityVal) {
     const handleOpacityChange = () => {
         const val = parseInt(opacitySlider.value, 10);
@@ -29,44 +32,32 @@ if (opacitySlider && opacityVal) {
     opacitySlider.addEventListener('change', handleOpacityChange);
 }
 
-chrome.storage.sync.get(['geminiApiKey', 'theme', 'assistantEnabled', 'bypassEnabled', 'isEnabled', 'modelMode', 'windowOpacity'], (data) => {
-    if (data.geminiApiKey) {
-        apiKeyInput.value = data.geminiApiKey;
-    }
+chrome.storage.sync.get(
+    ['geminiApiKey', 'geminiApiKeys', 'groqApiKey', 'providerMode', 'theme', 'assistantEnabled', 'bypassEnabled', 'isEnabled', 'windowOpacity'],
+    (data) => {
+        const keys = Array.isArray(data.geminiApiKeys) ? data.geminiApiKeys : [];
+        apiKeyInput1.value = keys[0] || data.geminiApiKey || '';
+        apiKeyInput2.value = keys[1] || '';
+        apiKeyInput3.value = keys[2] || '';
+        groqApiKeyInput.value = data.groqApiKey || '';
 
-    // Независимые режимы (с обратной совместимостью для старых версий)
-    assistantCheckbox.checked = data.assistantEnabled !== undefined ? data.assistantEnabled : (data.isEnabled !== false);
-    bypassCheckbox.checked = data.bypassEnabled !== undefined ? data.bypassEnabled : (data.isEnabled !== false);
+        if (providerModeSelect) {
+            providerModeSelect.value = data.providerMode || 'auto-hybrid';
+        }
 
-    // Уровень прозрачности (по умолчанию 25% — оптимум для невидимости со стороны)
-    const savedOpacity = data.windowOpacity !== undefined ? data.windowOpacity : 25;
-    if (opacitySlider && opacityVal) {
-        opacitySlider.value = savedOpacity;
-        opacityVal.innerText = `${savedOpacity}%`;
-    }
+        assistantCheckbox.checked = data.assistantEnabled !== undefined ? data.assistantEnabled : (data.isEnabled !== false);
+        bypassCheckbox.checked = data.bypassEnabled !== undefined ? data.bypassEnabled : (data.isEnabled !== false);
 
-    // Нормализация выбора модели (7 вариантов: 5 ручных моделей + 2 Auto режима)
-    const validModes = [
-        "gemini-3.8-flash",
-        "gemini-3.7-flash",
-        "gemini-3.6-flash",
-        "gemini-3.5-flash-lite",
-        "gemini-3.1-flash-lite",
-        "auto-flash",
-        "auto-flash-lite"
-    ];
-    let mode = data.modelMode || "gemini-3.8-flash";
-    if (mode === "auto") {
-        mode = "auto-flash";
-    }
-    if (!validModes.includes(mode)) {
-        mode = "auto-flash";
-    }
-    modelModeSelect.value = mode;
+        const savedOpacity = data.windowOpacity !== undefined ? data.windowOpacity : 25;
+        if (opacitySlider && opacityVal) {
+            opacitySlider.value = savedOpacity;
+            opacityVal.innerText = `${savedOpacity}%`;
+        }
 
-    const isLight = data.theme === 'light';
-    updateThemeUI(isLight);
-});
+        const isLight = data.theme === 'light';
+        updateThemeUI(isLight);
+    }
+);
 
 themeToggleBtn.addEventListener('click', () => {
     const isCurrentLight = document.documentElement.classList.contains('light');
@@ -76,22 +67,46 @@ themeToggleBtn.addEventListener('click', () => {
     });
 });
 
+[apiKeyInput1, groqApiKeyInput].forEach(el => {
+    el.addEventListener('input', () => el.classList.remove('input-error'));
+});
+
 saveBtn.addEventListener('click', () => {
-    const key = apiKeyInput.value.trim();
+    const k1 = apiKeyInput1.value.trim();
+    const k2 = apiKeyInput2.value.trim();
+    const k3 = apiKeyInput3.value.trim();
+    const groqKey = groqApiKeyInput.value.trim();
+    const providerMode = providerModeSelect ? providerModeSelect.value : 'auto-hybrid';
+
+    if (!k1 && !groqKey) {
+        apiKeyInput1.classList.add('input-error');
+        groqApiKeyInput.classList.add('input-error');
+        statusDiv.style.color = '#ef4444';
+        statusDiv.innerText = 'Укажите хотя бы ключ Gemini #1 или Groq!';
+        return;
+    }
+
     const assistantEnabled = assistantCheckbox.checked;
     const bypassEnabled = bypassCheckbox.checked;
-    const modelMode = modelModeSelect.value;
     const windowOpacity = opacitySlider ? parseInt(opacitySlider.value, 10) : 25;
 
+    const validGeminiKeys = [k1, k2, k3].filter((k, idx, arr) => k && arr.indexOf(k) === idx);
+
     chrome.storage.sync.set({
-        geminiApiKey: key,
+        geminiApiKey: k1,
+        geminiApiKeys: validGeminiKeys,
+        groqApiKey: groqKey,
+        providerMode: providerMode,
         assistantEnabled: assistantEnabled,
         bypassEnabled: bypassEnabled,
-        isEnabled: bypassEnabled, // обратная совместимость
-        modelMode: modelMode,
+        isEnabled: bypassEnabled,
         windowOpacity: windowOpacity
     }, () => {
-        statusDiv.innerText = 'Настройки применены!';
-        setTimeout(() => { statusDiv.innerText = ''; window.close(); }, 800);
+        statusDiv.style.color = '#34a853';
+        statusDiv.innerText = 'Настройки сохранены!';
+        setTimeout(() => {
+            statusDiv.innerText = '';
+            window.close();
+        }, 700);
     });
-});
+});

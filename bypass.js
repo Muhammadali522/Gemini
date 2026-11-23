@@ -1,5 +1,5 @@
 // ==================== UNIVERSAL BYPASS BRIDGE (ISOLATED WORLD) ====================
-// Управляет состоянием обхода из хранилища Chrome и передает его в MAIN world.
+// Управляет состоянием обхода из хранилища Chrome без модификации DOM-атрибутов страницы.
 
 (function () {
     'use strict';
@@ -8,19 +8,16 @@
 
     function syncState(active) {
         isEnabled = active;
-        window.postMessage({ type: 'GEMINI_BYPASS_UPDATE', enabled: active }, '*');
-        if (document.documentElement) {
-            document.documentElement.setAttribute('data-gemini-bypass', active ? 'true' : 'false');
-        }
+        try {
+            window.postMessage({ type: 'GEMINI_BYPASS_UPDATE', enabled: active }, '*');
+        } catch (e) {}
     }
 
-    // Инициализация состояния
     chrome.storage.sync.get(['bypassEnabled', 'isEnabled'], (data) => {
         const active = data.bypassEnabled !== undefined ? data.bypassEnabled : (data.isEnabled !== false);
         syncState(active);
     });
 
-    // Реакция на изменение настроек пользователем
     chrome.storage.onChanged.addListener((changes) => {
         if (changes.bypassEnabled || changes.isEnabled) {
             const active = changes.bypassEnabled ? changes.bypassEnabled.newValue : changes.isEnabled?.newValue;
@@ -28,10 +25,10 @@
         }
     });
 
-    // Подавление событий в изолированном контексте
     const events = [
         'blur', 'focusout', 'focusin', 'visibilitychange',
-        'webkitvisibilitychange', 'fullscreenchange', 'webkitfullscreenchange'
+        'webkitvisibilitychange', 'fullscreenchange', 'webkitfullscreenchange',
+        'pagehide', 'freeze', 'resume'
     ];
 
     events.forEach(ev => {

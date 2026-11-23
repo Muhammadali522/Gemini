@@ -1,71 +1,85 @@
-// ==================== КОНФИГУРАЦИЯ МОДЕЛЕЙ ====================
-const MODEL_CONFIG = {
+// ==================== КОНФИГУРАЦИЯ GEMINI И GROQ МОДЕЛЕЙ ====================
+const GEMINI_MODEL_CONFIG = {
+    "gemini-4-hydrogen": {
+        id: "gemini-4-hydrogen",
+        shortName: "4 Hydrogen",
+        useThinking: true
+    },
     "gemini-3.8-flash": {
         id: "gemini-3.8-flash",
-        displayName: "Gemini 3.8 Flash",
         shortName: "3.8 Flash",
-        family: "flash"
-    },
-    "gemini-3.7-flash": {
-        id: "gemini-3.7-flash",
-        displayName: "Gemini 3.7 Flash",
-        shortName: "3.7 Flash",
-        family: "flash"
+        useThinking: true
     },
     "gemini-3.6-flash": {
         id: "gemini-3.6-flash",
-        displayName: "Gemini 3.6 Flash",
         shortName: "3.6 Flash",
-        family: "flash"
+        useThinking: true
     },
     "gemini-3.5-flash-lite": {
         id: "gemini-3.5-flash-lite",
-        displayName: "Gemini 3.5 Flash Lite",
         shortName: "3.5 Lite",
-        family: "lite"
+        useThinking: false
     },
     "gemini-3.1-flash-lite": {
         id: "gemini-3.1-flash-lite",
-        displayName: "Gemini 3.1 Flash Lite",
         shortName: "3.1 Lite",
-        family: "lite"
+        useThinking: false
     }
 };
 
-// Учебная personality Gemini для ученика 8 класса: обязательное решение без шаблонов и плейсхолдеров
-const SYSTEM_INSTRUCTION_TEXT = "Ты — спокойный, точный учебный помощник для ученика 8 класса. Ты САМ решаешь задания и даешь готовые точные ответы. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО давать шаблонные заготовки, плейсхолдеры в скобках вроде '[Укажи ответ]' или общие советы 'внимательно прочитай условие'. На первой строке напиши: **Ответ: [конкретный ответ или выбранный вариант]**, ниже — 1-2 строки понятного решения. Строго БЕЗ эмодзи. Без $ и LaTeX, используй: ×, :, √, ², ³, °, ->.";
+const GEMINI_PRIORITY_CHAIN = [
+    "gemini-4-hydrogen",
+    "gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite"
+];
+
+// Модели Groq Console (мультимодальные для скриншотов и текстовые)
+const GROQ_VISION_MODELS = [
+    { id: "meta-llama/llama-4-scout-17b-16e-instruct", shortName: "Groq Llama4 Vision" },
+    { id: "meta-llama/llama-4-maverick-17b-128e-instruct", shortName: "Groq Maverick" }
+];
+
+const GROQ_TEXT_MODELS = [
+    { id: "openai/gpt-oss-120b", shortName: "Groq GPT-OSS 120B" },
+    { id: "llama-3.3-70b-versatile", shortName: "Groq Llama 70B" },
+    { id: "openai/gpt-oss-20b", shortName: "Groq GPT-OSS 20B" }
+];
+
+const SYSTEM_INSTRUCTION_TEXT = "Ты — максимально точный учебный помощник. Внимательно анализируй текст и изображение экрана целиком (вопросы в виде картинок, графики, схемы, формулы и варианты ответов в тестах). Тщательно перепроверяй вычисления и логику перед ответом. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО давать шаблонные заготовки, плейсхолдеры вроде '[Укажи ответ]' или советы 'внимательно прочитай условие'. На первой строке напиши: **Ответ: [точный ответ и/или буква/номер верного варианта]**, ниже — 1-2 строки краткого понятного объяснения. Строго БЕЗ эмодзи. Без $ и LaTeX, используй: ×, :, √, ², ³, °, ->.";
 
 function classifyError(status, serverMessage) {
     switch (status) {
         case 400:
-            return { code: "BAD_REQUEST", message: "Некорректный запрос к Gemini API (код 400)." };
+            return { code: "BAD_REQUEST", message: serverMessage || "Некорректный запрос к API (код 400)." };
         case 401:
-            return { code: "INVALID_KEY", message: "Неверный API-ключ Gemini. Проверьте ключ в настройках (код 401)." };
+            return { code: "INVALID_KEY", message: "Неверный API-ключ. Проверьте ключ в настройках (код 401)." };
         case 403:
-            return { code: "FORBIDDEN", message: "Доступ к модели запрещен. Проверьте настройки API-ключа (код 403)." };
+            return { code: "FORBIDDEN", message: "Доступ запрещен (код 403)." };
         case 404:
-            return { code: "NOT_FOUND", message: "Модель не найдена в Gemini API (код 404)." };
+            return { code: "NOT_FOUND", message: "Модель не найдена (код 404)." };
         case 429:
-            return { code: "RATE_LIMIT", message: "Превышен лимит запросов к Gemini API (код 429)." };
+            return { code: "RATE_LIMIT", message: "Превышен лимит запросов (код 429)." };
         case 500:
-            return { code: "SERVER_ERROR", message: "Внутренняя ошибка серверов Google Gemini (код 500)." };
         case 502:
         case 503:
         case 504:
-            return { code: "SERVICE_UNAVAILABLE", message: `Сервер Gemini временно недоступен или перегружен (код ${status}).` };
+            return { code: "SERVICE_UNAVAILABLE", message: `Сервер перегружен или недоступен (код ${status}).` };
         default:
             if (serverMessage === "TIMEOUT") {
-                return { code: "TIMEOUT", message: "Превышено время ожидания ответа от сервера Gemini." };
+                return { code: "TIMEOUT", message: "Сервер не ответил вовремя (таймаут)." };
             }
             if (serverMessage === "NETWORK_ERROR") {
-                return { code: "NETWORK_ERROR", message: "Ошибка сети. Проверьте подключение к интернету." };
+                return { code: "NETWORK_ERROR", message: "Ошибка сети. Проверьте интернет." };
             }
-            return { code: "API_ERROR", message: serverMessage || "Не удалось получить ответ от Gemini API. Проверьте соединение." };
+            return { code: "API_ERROR", message: serverMessage || "Ошибка API." };
     }
 }
 
-async function executeApiCall(modelName, apiKey, prompt, imageBase64, isImageRequest) {
-    const timeoutMs = isImageRequest ? 45000 : 30000;
+// ==================== ЗАПРОС К GOOGLE GEMINI ====================
+async function executeGeminiCall(modelName, apiKey, prompt, imageBase64, isImageRequest, forceNoThinking = false) {
+    const timeoutMs = isImageRequest ? 14000 : 10000;
     const controller = new AbortController();
     const timeoutTimer = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -85,27 +99,34 @@ async function executeApiCall(modelName, apiKey, prompt, imageBase64, isImageReq
         });
     }
 
+    const modelInfo = GEMINI_MODEL_CONFIG[modelName];
+    const generationConfig = {
+        maxOutputTokens: 4096
+    };
+
+    if (!forceNoThinking && modelInfo?.useThinking) {
+        generationConfig.thinkingConfig = {
+            thinkingLevel: "LOW"
+        };
+    }
+
     const payload = JSON.stringify({
         systemInstruction: {
             parts: [{ text: SYSTEM_INSTRUCTION_TEXT }]
         },
         contents: [{ parts }],
-        generationConfig: {
-            temperature: 0.2,
-            maxOutputTokens: 1024
-        }
+        generationConfig
     });
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
 
     try {
-        if (isImageRequest) {
-            console.log(`[Gemini] Запрос с изображением начат для модели ${modelName}`);
-        }
-
         const response = await fetch(url, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+                "Content-Type": "application/json",
+                "x-goog-api-key": apiKey
+            },
             body: payload,
             signal: controller.signal
         });
@@ -115,24 +136,32 @@ async function executeApiCall(modelName, apiKey, prompt, imageBase64, isImageReq
         if (!response.ok) {
             const status = response.status;
             let errorData = null;
-            try {
-                errorData = await response.json();
-            } catch (e) {}
-
+            try { errorData = await response.json(); } catch (e) { }
             const serverMsg = errorData?.error?.message;
             const classified = classifyError(status, serverMsg);
             const err = new Error(classified.message);
             err.status = status;
             err.code = classified.code;
-            err.serverMessage = serverMsg;
             throw err;
         }
 
         const data = await response.json();
-        return { data, modelName };
+        const candidate = data?.candidates?.[0];
+        const text = candidate?.content?.parts
+            ?.filter(p => p.text && !p.thought)
+            .map(p => p.text)
+            .join("\n")
+            .trim();
+
+        if (!text) {
+            const emptyErr = new Error("Пустой ответ от модели Gemini");
+            emptyErr.status = 502;
+            throw emptyErr;
+        }
+
+        return text;
     } catch (err) {
         clearTimeout(timeoutTimer);
-
         if (err.name === 'AbortError') {
             const classified = classifyError(0, "TIMEOUT");
             const timeoutErr = new Error(classified.message);
@@ -140,7 +169,6 @@ async function executeApiCall(modelName, apiKey, prompt, imageBase64, isImageReq
             timeoutErr.code = classified.code;
             throw timeoutErr;
         }
-
         if (!err.status && (err instanceof TypeError || (err.message && err.message.includes('fetch')))) {
             const classified = classifyError(0, "NETWORK_ERROR");
             const netErr = new Error(classified.message);
@@ -148,147 +176,269 @@ async function executeApiCall(modelName, apiKey, prompt, imageBase64, isImageReq
             netErr.code = classified.code;
             throw netErr;
         }
-
         throw err;
     }
 }
 
-function extractText(data) {
-    if (data?.promptFeedback?.blockReason) {
-        return `Запрос заблокирован фильтром безопасности Gemini (${data.promptFeedback.blockReason}).`;
-    }
-    const candidate = data?.candidates?.[0];
-    if (!candidate) {
-        return "Модель не вернула ответ.";
-    }
-    if (candidate.finishReason === "SAFETY") {
-        return "Ответ заблокирован фильтром безопасности.";
-    }
-    const text = candidate.content?.parts?.map(p => p.text).filter(Boolean).join("\n");
-    return text || "Модель вернула пустой ответ.";
-}
+// ==================== ЗАПРОС К GROQ CONSOLE API ====================
+async function executeGroqCall(modelId, groqApiKey, prompt, imageBase64) {
+    const timeoutMs = imageBase64 ? 15000 : 12000;
+    const controller = new AbortController();
+    const timeoutTimer = setTimeout(() => controller.abort(), timeoutMs);
 
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === "askGemini") {
-        const apiKey = request.apiKey;
-        if (!apiKey) {
-            sendResponse({ error: true, code: "MISSING_KEY", message: "API-ключ Gemini не указан в настройках." });
-            return false;
+    const userContent = imageBase64
+        ? [
+            { type: "text", text: prompt },
+            { type: "image_url", image_url: { url: imageBase64 } }
+        ]
+        : prompt;
+
+    const payload = JSON.stringify({
+        model: modelId,
+        messages: [
+            { role: "system", content: SYSTEM_INSTRUCTION_TEXT },
+            { role: "user", content: userContent }
+        ],
+        temperature: 0.2,
+        max_tokens: 2048
+    });
+
+    try {
+        const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${groqApiKey}`
+            },
+            body: payload,
+            signal: controller.signal
+        });
+
+        clearTimeout(timeoutTimer);
+
+        if (!response.ok) {
+            const status = response.status;
+            let errorData = null;
+            try { errorData = await response.json(); } catch (e) { }
+            const serverMsg = errorData?.error?.message;
+            const classified = classifyError(status, serverMsg);
+            const err = new Error(classified.message);
+            err.status = status;
+            err.code = classified.code;
+            throw err;
         }
 
-        let mode = request.modelMode || "auto-flash";
-        if (mode === "auto") {
-            mode = "auto-flash";
+        const data = await response.json();
+        const text = data?.choices?.[0]?.message?.content?.trim();
+        if (!text) {
+            const emptyErr = new Error("Пустой ответ от Groq");
+            emptyErr.status = 502;
+            throw emptyErr;
+        }
+        return text;
+    } catch (err) {
+        clearTimeout(timeoutTimer);
+        if (err.name === 'AbortError') {
+            const classified = classifyError(0, "TIMEOUT");
+            const timeoutErr = new Error(classified.message);
+            timeoutErr.status = 408;
+            timeoutErr.code = classified.code;
+            throw timeoutErr;
+        }
+        throw err;
+    }
+}
+
+// ==================== ЗАПУСК ЦЕПОЧКИ GEMINI ====================
+async function runGeminiChain(apiKeys, prompt, image) {
+    const isImage = !!image;
+    const invalidKeys = new Set();
+    let lastError = null;
+
+    for (let mIdx = 0; mIdx < GEMINI_PRIORITY_CHAIN.length; mIdx++) {
+        const currentModel = GEMINI_PRIORITY_CHAIN[mIdx];
+        const modelInfo = GEMINI_MODEL_CONFIG[currentModel];
+
+        for (let kIdx = 0; kIdx < apiKeys.length; kIdx++) {
+            if (invalidKeys.has(kIdx)) continue;
+            const currentKey = apiKeys[kIdx];
+
+            try {
+                console.log(`[Gemini] Пробуем ${currentModel} (Ключ #${kIdx + 1})`);
+                let answer;
+                try {
+                    answer = await executeGeminiCall(currentModel, currentKey, prompt, image, isImage, false);
+                } catch (firstErr) {
+                    if (firstErr.status === 400 && modelInfo.useThinking) {
+                        answer = await executeGeminiCall(currentModel, currentKey, prompt, image, isImage, true);
+                    } else {
+                        throw firstErr;
+                    }
+                }
+
+                const keyTag = apiKeys.length > 1 ? ` · K${kIdx + 1}` : "";
+                return {
+                    success: true,
+                    answer,
+                    model: currentModel,
+                    modelDisplayName: `${modelInfo.shortName}${keyTag}`
+                };
+            } catch (err) {
+                lastError = err;
+                console.warn(`[Gemini] Ошибка ${currentModel} K${kIdx + 1}:`, err.status, err.message);
+                if (err.status === 401) {
+                    invalidKeys.add(kIdx);
+                }
+            }
+        }
+
+        if (invalidKeys.size === apiKeys.length) break;
+    }
+
+    throw lastError || new Error("Все модели Gemini недоступны.");
+}
+
+// ==================== ЗАПУСК ЦЕПОЧКИ GROQ ====================
+async function runGroqChain(groqKey, prompt, image) {
+    let lastError = null;
+
+    // 1. Если есть скриншот — пробуем Vision-модели Groq (они реально видят картинку)
+    if (image) {
+        for (const vm of GROQ_VISION_MODELS) {
+            try {
+                console.log(`[Groq Vision] Пробуем ${vm.id}`);
+                const answer = await executeGroqCall(vm.id, groqKey, prompt, image);
+                return {
+                    success: true,
+                    answer,
+                    model: vm.id,
+                    modelDisplayName: vm.shortName
+                };
+            } catch (err) {
+                lastError = err;
+                console.warn(`[Groq Vision] Ошибка ${vm.id}:`, err.status, err.message);
+                if (err.status === 401) throw err;
+            }
+        }
+    }
+
+    // 2. Текстовые модели Groq (если Vision не сработал — убираем требование смотреть картинку,
+    // чтобы GPT-OSS 120B решила задачу по выделенному тексту и контексту со страницы)
+    const textOnlyPrompt = image
+        ? prompt
+            .replace(/Проанализируй прикрепленный скриншот экрана и выделенный пользователем фрагмент\./g, 'Реши текстовое задание ниже.')
+            .replace(/1\.\s*Внимательно изучи ВЕСЬ скриншот:[^\n]+\n?/g, '')
+        : prompt;
+
+    for (const tm of GROQ_TEXT_MODELS) {
+        try {
+            console.log(`[Groq Text] Пробуем ${tm.id}`);
+            const answer = await executeGroqCall(tm.id, groqKey, textOnlyPrompt, null);
+            return {
+                success: true,
+                answer,
+                model: tm.id,
+                modelDisplayName: tm.shortName
+            };
+        } catch (err) {
+            lastError = err;
+            console.warn(`[Groq Text] Ошибка ${tm.id}:`, err.status, err.message);
+            if (err.status === 401) throw err;
+        }
+    }
+
+    throw lastError || new Error("Все модели Groq недоступны.");
+}
+
+// ==================== ОБРАБОТЧИК СООБЩЕНИЙ ====================
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === "askGemini") {
+        let geminiKeys = [];
+        if (Array.isArray(request.apiKeys) && request.apiKeys.length > 0) {
+            geminiKeys = request.apiKeys.map(k => (k || "").trim()).filter(Boolean);
+        } else if (request.apiKey) {
+            geminiKeys = [request.apiKey.trim()];
+        }
+
+        const groqKey = (request.groqApiKey || "").trim();
+        const providerMode = request.providerMode || "auto-hybrid";
+
+        if (geminiKeys.length === 0 && !groqKey) {
+            sendResponse({ error: true, code: "MISSING_KEY", message: "Укажите ключ Gemini или Groq в настройках." });
+            return false;
         }
 
         const prompt = request.prompt;
         const image = request.image;
-        const isImage = !!image;
-
-        // Построение цепочки моделей в строгом соответствии с требованиями:
-        // Auto Flash: 3.8 → 3.7 → 3.6 → снова 3.8
-        // Auto Flash Lite: 3.5 Lite → 3.1 Lite → снова 3.5 Lite
-        // Ручные режимы: ровно одна выбранная модель без каскада
-        let chain = [];
-        let isAuto = false;
-
-        if (request.isVerification || mode === "smart-verify") {
-            // Для сверки/проверки ответов: самая умная модель в бесплатном тарифе Gemini API (Gemini 3.8 Flash)
-            // с каскадным переключением на 3.7 Flash и 3.6 Flash при исчерпании лимитов
-            chain = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"];
-            isAuto = true;
-        } else if (mode === "auto-flash") {
-            chain = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.8-flash"];
-            isAuto = true;
-        } else if (mode === "auto-flash-lite") {
-            chain = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite"];
-            isAuto = true;
-        } else if (MODEL_CONFIG[mode]) {
-            chain = [mode];
-            isAuto = false;
-        } else {
-            // Режим по умолчанию, если значение неизвестно
-            chain = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.8-flash"];
-            isAuto = true;
-        }
 
         (async () => {
-            let lastError = null;
-
-            for (let i = 0; i < chain.length; i++) {
-                const currentModel = chain[i];
-                const modelInfo = MODEL_CONFIG[currentModel] || { displayName: currentModel, shortName: currentModel };
-
-                try {
-                    console.log(`[Gemini] Запрос (${i + 1}/${chain.length}): ${currentModel}`);
-                    const res = await executeApiCall(currentModel, apiKey, prompt, image, isImage);
-                    const answer = extractText(res.data);
-
-                    // Формируем понятное имя модели для интерфейса
-                    let displayBadge = modelInfo.displayName;
-                    if (isAuto) {
-                        displayBadge = i === 0 ? `${modelInfo.shortName} (Auto)` : `${modelInfo.shortName} (Каскад)`;
-                    }
-
-                    sendResponse({
-                        success: true,
-                        answer: answer,
-                        model: currentModel,
-                        modelDisplayName: displayBadge,
-                        wasFallback: isAuto && i > 0
-                    });
-                    return; // После успешного ответа останавливаемся!
-                } catch (err) {
-                    lastError = err;
-                    console.warn(`[Gemini] Ошибка модели ${currentModel} (попытка ${i + 1}/${chain.length}):`, err.status || err.code, err.message);
-
-                    // Для ручного выбора — сразу возвращаем ошибку без fallback
-                    if (!isAuto) {
-                        sendResponse({
-                            error: true,
-                            status: err.status,
-                            code: err.code || "API_ERROR",
-                            message: err.message
-                        });
-                        return;
-                    }
-
-                    // Фатальные ошибки конфигурации пользователя (неверный ключ, запрет доступа, ошибка синтаксиса)
-                    const isFatal = (err.status === 400 || err.status === 401 || err.status === 403);
-                    if (isFatal) {
-                        sendResponse({
-                            error: true,
-                            status: err.status,
-                            code: err.code || "FATAL_ERROR",
-                            message: err.message
-                        });
-                        return;
-                    }
-
-                    // При quota (429) / rate-limit / временной ошибке (500, 502, 503, 504, timeout, network, 404)
-                    // переходим к следующей модели в цепочке. Цикл не бесконечен (ровно chain.length попыток).
+            try {
+                // Режим 1: Только Groq
+                if (providerMode === "groq-only") {
+                    if (!groqKey) throw new Error("Не указан API-ключ Groq (gsk_...) в настройках.");
+                    const res = await runGroqChain(groqKey, prompt, image);
+                    sendResponse(res);
+                    return;
                 }
-            }
 
-            // Если все попытки в цепочке завершились ошибкой
-            sendResponse({
-                error: true,
-                status: lastError?.status,
-                code: lastError?.code || "CHAIN_EXHAUSTED",
-                message: lastError?.message || "Все модели в цепочке временно недоступны. Попробуйте позже."
-            });
+                // Режим 2: Только Gemini
+                if (providerMode === "gemini-only") {
+                    if (geminiKeys.length === 0) throw new Error("Не указан API-ключ Gemini в настройках.");
+                    const res = await runGeminiChain(geminiKeys, prompt, image);
+                    sendResponse(res);
+                    return;
+                }
+
+                // Режим 3: Сначала Groq -> потом Gemini
+                if (providerMode === "groq-first") {
+                    if (groqKey) {
+                        try {
+                            const res = await runGroqChain(groqKey, prompt, image);
+                            sendResponse(res);
+                            return;
+                        } catch (groqErr) {
+                            console.warn("[Router] Groq упал, переключаемся на Gemini:", groqErr.message);
+                            if (geminiKeys.length === 0) throw groqErr;
+                        }
+                    }
+                    const res = await runGeminiChain(geminiKeys, prompt, image);
+                    sendResponse(res);
+                    return;
+                }
+
+                // Режим 4 (по умолчанию): Авто — сначала Gemini (умные), при 503/429 мгновенно Groq
+                if (geminiKeys.length > 0) {
+                    try {
+                        const res = await runGeminiChain(geminiKeys, prompt, image);
+                        sendResponse(res);
+                        return;
+                    } catch (geminiErr) {
+                        console.warn("[Router] Gemini перегружен/ошибка, переключаемся на Groq:", geminiErr.message);
+                        if (!groqKey) throw geminiErr;
+                    }
+                }
+
+                const res = await runGroqChain(groqKey, prompt, image);
+                sendResponse(res);
+            } catch (finalErr) {
+                sendResponse({
+                    error: true,
+                    status: finalErr?.status,
+                    code: finalErr?.code || "ALL_FAILED",
+                    message: finalErr?.message || "Не удалось получить ответ ни от одной модели."
+                });
+            }
         })();
 
-        return true; // Асинхронный ответ
+        return true;
     }
 
     if (request.action === "captureTab") {
         const winId = (sender && sender.tab && sender.tab.windowId) ? sender.tab.windowId : null;
-        chrome.tabs.captureVisibleTab(winId, { format: "jpeg", quality: 75 }, (dataUrl) => {
+        chrome.tabs.captureVisibleTab(winId, { format: "jpeg", quality: 82 }, (dataUrl) => {
             if (chrome.runtime.lastError) {
-                // Если с winId возникла ошибка, пробуем с текущим активным окном (null)
                 if (winId !== null) {
-                    chrome.tabs.captureVisibleTab(null, { format: "jpeg", quality: 75 }, (dataUrlFallback) => {
+                    chrome.tabs.captureVisibleTab(null, { format: "jpeg", quality: 82 }, (dataUrlFallback) => {
                         if (chrome.runtime.lastError || !dataUrlFallback) {
                             sendResponse({
                                 error: true,
