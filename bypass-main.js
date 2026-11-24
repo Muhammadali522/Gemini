@@ -1,4 +1,4 @@
-// ==================== HARDENED ANTI-PROCTORING BYPASS (MAIN WORLD) ====================
+// ==================== CLEAN STEALTH BYPASS (MAIN WORLD) ====================
 (function () {
     'use strict';
 
@@ -11,49 +11,50 @@
         }
     });
 
-    // ==================== 0. МАСКИРОВКА ПОД NATIVE CODE (ЗАЩИТА ПУНКТА 4) ====================
-    const nativeStrings = new WeakMap();
-    const origFunctionToString = Function.prototype.toString;
-
-    function maskAsNative(fn, nativeName) {
-        if (typeof fn === 'function') {
-            nativeStrings.set(fn, `function ${nativeName || fn.name || ''}() { [native code] }`);
-        }
-        return fn;
-    }
-
-    const patchedToString = function toString() {
-        if (nativeStrings.has(this)) {
-            return nativeStrings.get(this);
-        }
-        return origFunctionToString.call(this);
-    };
-    nativeStrings.set(patchedToString, 'function toString() { [native code] }');
-    Function.prototype.toString = patchedToString;
-
-    function defineNativeGetter(target, prop, getterFn) {
+    // Аккуратная подмена геттеров в прототипе через Proxy (без патча Function.prototype.toString)
+    function patchProtoGetter(proto, prop, customGetter) {
         try {
-            maskAsNative(getterFn, `get ${prop}`);
-            Object.defineProperty(target, prop, {
-                get: getterFn,
-                configurable: true
+            const desc = Object.getOwnPropertyDescriptor(proto, prop);
+            if (!desc || !desc.get) return;
+
+            const origGet = desc.get;
+            const proxyGet = new Proxy(origGet, {
+                apply(target, thisArg, args) {
+                    if (!isEnabled) return Reflect.apply(target, thisArg, args);
+                    return customGetter.call(thisArg, origGet);
+                }
             });
-        } catch (e) {}
+
+            Object.defineProperty(proto, prop, {
+                get: proxyGet,
+                set: desc.set,
+                enumerable: desc.enumerable,
+                configurable: desc.configurable
+            });
+        } catch (e) { }
     }
 
-    // ==================== 1. FULLSCREEN ЭМУЛЯЦИЯ (ПУНКТ 1) ====================
-    const origFullscreenElementDesc = Object.getOwnPropertyDescriptor(Document.prototype, 'fullscreenElement');
+    function patchMethod(obj, methodName, handler) {
+        try {
+            const orig = obj && obj[methodName];
+            if (typeof orig !== 'function') return;
 
-    function getEffectiveFullscreenElement() {
-        if (!isEnabled) {
-            return origFullscreenElementDesc && origFullscreenElementDesc.get
-                ? origFullscreenElementDesc.get.call(document)
-                : null;
-        }
-        if (activeFullscreenElement && activeFullscreenElement.isConnected) {
-            return activeFullscreenElement;
-        }
-        return document.documentElement;
+            obj[methodName] = new Proxy(orig, {
+                apply(target, thisArg, args) {
+                    if (!isEnabled) return Reflect.apply(target, thisArg, args);
+                    return handler(target, thisArg, args);
+                }
+            });
+        } catch (e) { }
+    }
+
+    // ==================== 1. FULLSCREEN ЭМУЛЯЦИЯ ====================
+    function getEffectiveFullscreenElement(origGet) {
+        const real = origGet.call(this);
+        if (real) return real;
+        return (activeFullscreenElement && activeFullscreenElement.isConnected)
+            ? activeFullscreenElement
+            : document.documentElement;
     }
 
     [
@@ -62,75 +63,37 @@
         'mozFullScreenElement',
         'msFullscreenElement',
         'webkitCurrentFullScreenElement'
-    ].forEach(prop => defineNativeGetter(document, prop, getEffectiveFullscreenElement));
+    ].forEach(prop => patchProtoGetter(Document.prototype, prop, getEffectiveFullscreenElement));
 
     [
         'fullscreenEnabled',
         'webkitFullscreenEnabled',
         'mozFullScreenEnabled',
         'msFullscreenEnabled'
-    ].forEach(prop => defineNativeGetter(document, prop, () => true));
+    ].forEach(prop => patchProtoGetter(Document.prototype, prop, () => true));
 
     [
         'fullscreen',
         'webkitIsFullScreen',
         'mozFullScreen'
-    ].forEach(prop => defineNativeGetter(document, prop, () => Boolean(isEnabled)));
+    ].forEach(prop => patchProtoGetter(Document.prototype, prop, () => true));
 
-    const origRequestFullscreen = Element.prototype.requestFullscreen;
-    const origWebkitRequestFullscreen = Element.prototype.webkitRequestFullscreen || Element.prototype.webkitRequestFullScreen;
-    const origMozRequestFullScreen = Element.prototype.mozRequestFullScreen;
-    const origMsRequestFullscreen = Element.prototype.msRequestFullscreen;
-
-    function fakeRequestFullscreen(origMethod, self, args) {
-        activeFullscreenElement = self;
-        if (!isEnabled && origMethod) {
-            return origMethod.apply(self, args);
-        }
-        if (origMethod) {
-            return origMethod.apply(self, args).catch(() => Promise.resolve());
-        }
-        return Promise.resolve();
+    function fakeRequestFullscreen(target, thisArg, args) {
+        activeFullscreenElement = thisArg;
+        return Reflect.apply(target, thisArg, args).catch(() => Promise.resolve());
     }
 
-    Element.prototype.requestFullscreen = maskAsNative(function requestFullscreen(...args) {
-        return fakeRequestFullscreen(origRequestFullscreen, this, args);
-    }, 'requestFullscreen');
+    patchMethod(Element.prototype, 'requestFullscreen', fakeRequestFullscreen);
+    patchMethod(Element.prototype, 'webkitRequestFullscreen', fakeRequestFullscreen);
+    patchMethod(Element.prototype, 'webkitRequestFullScreen', fakeRequestFullscreen);
+    patchMethod(Element.prototype, 'mozRequestFullScreen', fakeRequestFullscreen);
+    patchMethod(Element.prototype, 'msRequestFullscreen', fakeRequestFullscreen);
 
-    if (Element.prototype.webkitRequestFullscreen) {
-        Element.prototype.webkitRequestFullscreen = maskAsNative(function webkitRequestFullscreen(...args) {
-            return fakeRequestFullscreen(origWebkitRequestFullscreen, this, args);
-        }, 'webkitRequestFullscreen');
-    }
-    if (Element.prototype.webkitRequestFullScreen) {
-        Element.prototype.webkitRequestFullScreen = maskAsNative(function webkitRequestFullScreen(...args) {
-            return fakeRequestFullscreen(origWebkitRequestFullscreen, this, args);
-        }, 'webkitRequestFullScreen');
-    }
-    if (Element.prototype.mozRequestFullScreen) {
-        Element.prototype.mozRequestFullScreen = maskAsNative(function mozRequestFullScreen(...args) {
-            return fakeRequestFullscreen(origMozRequestFullScreen, this, args);
-        }, 'mozRequestFullScreen');
-    }
-    if (Element.prototype.msRequestFullscreen) {
-        Element.prototype.msRequestFullscreen = maskAsNative(function msRequestFullscreen(...args) {
-            return fakeRequestFullscreen(origMsRequestFullscreen, this, args);
-        }, 'msRequestFullscreen');
-    }
-
-    const origExitFullscreen = document.exitFullscreen;
-    document.exitFullscreen = maskAsNative(function exitFullscreen(...args) {
-        if (!isEnabled && origExitFullscreen) {
-            return origExitFullscreen.apply(this, args);
-        }
-        return Promise.resolve();
-    }, 'exitFullscreen');
-
-    ['webkitExitFullscreen', 'webkitCancelFullScreen', 'mozCancelFullScreen', 'msExitFullscreen'].forEach(fn => {
-        if (document[fn]) {
-            document[fn] = maskAsNative(function () { return Promise.resolve(); }, fn);
-        }
-    });
+    patchMethod(Document.prototype, 'exitFullscreen', () => Promise.resolve());
+    patchMethod(Document.prototype, 'webkitExitFullscreen', () => Promise.resolve());
+    patchMethod(Document.prototype, 'webkitCancelFullScreen', () => Promise.resolve());
+    patchMethod(Document.prototype, 'mozCancelFullScreen', () => Promise.resolve());
+    patchMethod(Document.prototype, 'msExitFullscreen', () => Promise.resolve());
 
     const fullscreenEvents = [
         'fullscreenchange', 'webkitfullscreenchange', 'mozfullscreenchange', 'MSFullscreenChange',
@@ -139,55 +102,27 @@
 
     fullscreenEvents.forEach(evName => {
         const blocker = (e) => {
-            if (isEnabled) {
-                if (!activeFullscreenElement) activeFullscreenElement = document.documentElement;
-                e.stopImmediatePropagation();
-                e.preventDefault();
-            }
+            if (!isEnabled) return;
+            if (!activeFullscreenElement) activeFullscreenElement = document.documentElement;
+            e.stopImmediatePropagation();
         };
         window.addEventListener(evName, blocker, true);
         document.addEventListener(evName, blocker, true);
     });
 
-    // ==================== 2. ВИДИМОСТЬ, ФОКУС И РАЗМЕРЫ ОКНА (ПУНКТ 1) ====================
-    const origHiddenDesc = Object.getOwnPropertyDescriptor(Document.prototype, 'hidden');
-    const origVisibilityDesc = Object.getOwnPropertyDescriptor(Document.prototype, 'visibilityState');
-    const origHasFocus = document.hasFocus;
+    // ==================== 2. ВИДИМОСТЬ И ФОКУС ВКЛАДКИ ====================
+    patchProtoGetter(Document.prototype, 'hidden', () => false);
+    patchProtoGetter(Document.prototype, 'webkitHidden', () => false);
+    patchProtoGetter(Document.prototype, 'visibilityState', () => 'visible');
+    patchProtoGetter(Document.prototype, 'webkitVisibilityState', () => 'visible');
 
-    defineNativeGetter(document, 'hidden', () => {
-        if (!isEnabled && origHiddenDesc && origHiddenDesc.get) return origHiddenDesc.get.call(document);
-        return false;
-    });
-    defineNativeGetter(document, 'webkitHidden', () => false);
-    defineNativeGetter(document, 'visibilityState', () => {
-        if (!isEnabled && origVisibilityDesc && origVisibilityDesc.get) return origVisibilityDesc.get.call(document);
-        return 'visible';
-    });
-    defineNativeGetter(document, 'webkitVisibilityState', () => 'visible');
-
-    if (origHasFocus) {
-        document.hasFocus = maskAsNative(function hasFocus() {
-            return isEnabled ? true : origHasFocus.call(document);
-        }, 'hasFocus');
-    }
-
-    const origOuterWidthDesc = Object.getOwnPropertyDescriptor(window, 'outerWidth');
-    const origOuterHeightDesc = Object.getOwnPropertyDescriptor(window, 'outerHeight');
-
-    defineNativeGetter(window, 'outerWidth', () => {
-        if (!isEnabled && origOuterWidthDesc && origOuterWidthDesc.get) return origOuterWidthDesc.get.call(window);
-        return Math.max(window.innerWidth, screen.width);
-    });
-    defineNativeGetter(window, 'outerHeight', () => {
-        if (!isEnabled && origOuterHeightDesc && origOuterHeightDesc.get) return origOuterHeightDesc.get.call(window);
-        return Math.max(window.innerHeight, screen.height);
-    });
+    patchMethod(Document.prototype, 'hasFocus', () => true);
 
     const proctorEvents = [
         'blur', 'focusout', 'focusin', 'focus',
         'visibilitychange', 'webkitvisibilitychange',
         'pagehide', 'pageshow', 'freeze', 'resume',
-        'mouseleave', 'mouseout', 'resize'
+        'mouseleave', 'mouseout'
     ];
 
     proctorEvents.forEach(evName => {
@@ -196,9 +131,12 @@
             if (evName === 'mouseleave' || evName === 'mouseout') {
                 if (e.target === document || e.target === window || !e.relatedTarget) {
                     e.stopImmediatePropagation();
-                    e.preventDefault();
                 }
             } else if (evName === 'focus' || evName === 'focusin') {
+                if (e.target === window || e.target === document) {
+                    e.stopImmediatePropagation();
+                }
+            } else if (evName === 'blur' || evName === 'focusout') {
                 if (e.target === window || e.target === document) {
                     e.stopImmediatePropagation();
                 }
@@ -208,32 +146,13 @@
                 }
             } else {
                 e.stopImmediatePropagation();
-                e.preventDefault();
             }
         };
         window.addEventListener(evName, handler, true);
         document.addEventListener(evName, handler, true);
     });
 
-    ['onblur', 'onfocus', 'onvisibilitychange', 'onfullscreenchange', 'onwebkitfullscreenchange'].forEach(prop => {
-        try {
-            Object.defineProperty(window, prop, {
-                get: () => null,
-                set: () => {},
-                configurable: true
-            });
-            Object.defineProperty(document, prop, {
-                get: () => null,
-                set: () => {},
-                configurable: true
-            });
-        } catch (e) {}
-    });
-
-    // ==================== 3. ЗАЩИТА ОТ КОНТРОЛЯ КЛАВИШ И УХОДА НА ДРУГИЕ ВКЛАДКИ/ОКНА (ПУНКТ 3) ====================
-    // Не вызываем preventDefault(), чтобы сам браузер и Windows нормально выполняли:
-    // Win+D, Alt+Tab, Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+T, Ctrl+Shift+T, Ctrl+N, Ctrl+Shift+N,
-    // но останавливаем всплытие (stopImmediatePropagation), чтобы скрипт сайта не узнал о нажатии.
+    // ==================== 3. ЗАЩИТА ОТ КОНТРОЛЯ КЛАВИШ ====================
     ['keydown', 'keyup', 'keypress'].forEach(evName => {
         const keyGuard = (e) => {
             if (!isEnabled) return;
@@ -241,12 +160,9 @@
             const code = e.code || '';
             const key = (e.key || '').toLowerCase();
 
-            // Системные модификаторы (Win / Meta, Alt, Tab, Escape)
             const isSystemMod = e.altKey || e.metaKey ||
                 key === 'alt' || key === 'tab' || key === 'meta' || key === 'os' || key === 'escape';
 
-            // Браузерные сочетания вкладок и окон:
-            // Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+T, Ctrl+Shift+T, Ctrl+W, Ctrl+N, Ctrl+Shift+N, Ctrl+1..9
             const isBrowserNav = (e.ctrlKey || e.metaKey) && (
                 code === 'Tab' ||
                 code === 'KeyT' ||
@@ -258,7 +174,6 @@
                 ['t', 'е', 'w', 'ц', 'n', 'т'].includes(key)
             );
 
-            // DevTools и скриншот системы (F12, PrintScreen, Ctrl+Shift+I/J/C)
             const isInspectOrShot = e.key === 'F12' || e.key === 'PrintScreen' ||
                 ((e.ctrlKey || e.metaKey) && e.shiftKey && ['KeyI', 'KeyJ', 'KeyC'].includes(code));
 
@@ -270,181 +185,80 @@
         document.addEventListener(evName, keyGuard, true);
     });
 
-    // ==================== 4. СКРЫТИЕ UI РАСШИРЕНИЯ ОТ MUTATION OBSERVER И DOM-СКАНЕРОВ (ПУНКТ 5) ====================
-    const isExtNode = (node) => {
-        return node && node.nodeType === 1 && typeof node.id === 'string' && node.id.startsWith('ui-ext-');
-    };
-
-    try {
-        const origQuerySelectorAll = Document.prototype.querySelectorAll;
-        Document.prototype.querySelectorAll = maskAsNative(function querySelectorAll(selector) {
-            const list = origQuerySelectorAll.apply(this, arguments);
-            if (!isEnabled) return list;
-            return Array.from(list).filter(el => !isExtNode(el));
-        }, 'querySelectorAll');
-
-        const origGetElementById = Document.prototype.getElementById;
-        Document.prototype.getElementById = maskAsNative(function getElementById(id) {
-            if (isEnabled && typeof id === 'string' && id.startsWith('ui-ext-')) {
-                return null;
+    // ==================== 4. ЗАЩИТА ОТ CAPTURE, ПЕЧАТИ И ПРОВЕРКИ РАЗРЕШЕНИЙ ====================
+    if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
+        patchMethod(navigator.mediaDevices, 'getDisplayMedia', () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = screen.width || 1920;
+            canvas.height = screen.height || 1080;
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
             }
-            return origGetElementById.apply(this, arguments);
-        }, 'getElementById');
+            return Promise.resolve(canvas.captureStream(5));
+        });
+    }
 
-        if (window.MutationObserver) {
-            const OrigMutationObserver = window.MutationObserver;
-            window.MutationObserver = maskAsNative(function MutationObserver(callback) {
-                const wrappedCallback = function (mutations, observer) {
-                    if (!isEnabled) return callback(mutations, observer);
-                    const filtered = [];
-                    for (let i = 0; i < mutations.length; i++) {
-                        const m = mutations[i];
-                        if (isExtNode(m.target)) continue;
-                        const added = Array.from(m.addedNodes || []).filter(n => !isExtNode(n));
-                        const removed = Array.from(m.removedNodes || []).filter(n => !isExtNode(n));
-                        if (m.type === 'childList' && added.length === 0 && removed.length === 0) {
-                            continue;
-                        }
-                        filtered.push(m);
-                    }
-                    if (filtered.length > 0) {
-                        callback(filtered, observer);
-                    }
-                };
-                return new OrigMutationObserver(wrappedCallback);
-            }, 'MutationObserver');
-            window.MutationObserver.prototype = OrigMutationObserver.prototype;
-        }
-    } catch (e) {}
-
-    // ==================== 5. КОМПЕНСАЦИЯ ПАУЗ В АНИМАЦИИ И ФОНОВОГО ТРОТТЛИНГА (ПУНКТ 6) ====================
-    try {
-        const origRAF = window.requestAnimationFrame.bind(window);
-        let virtualTime = performance.now();
-        let lastRealTime = virtualTime;
-
-        window.requestAnimationFrame = maskAsNative(function requestAnimationFrame(callback) {
-            return origRAF(function (realNow) {
-                if (!isEnabled) {
-                    lastRealTime = realNow;
-                    virtualTime = realNow;
-                    return callback(realNow);
-                }
-                const realDelta = realNow - lastRealTime;
-                lastRealTime = realNow;
-                const clampedDelta = (realDelta > 50) ? 16.67 : Math.max(0, realDelta);
-                virtualTime += clampedDelta;
-                return callback(virtualTime);
-            });
-        }, 'requestAnimationFrame');
-    } catch (e) {}
-
-    // ==================== 6. ЗАЩИТА ОТ CAPTURE, ПЕЧАТИ И ПРОВЕРКИ РАЗРЕШЕНИЙ ====================
-    try {
-        if (navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) {
-            const origGetDisplayMedia = navigator.mediaDevices.getDisplayMedia.bind(navigator.mediaDevices);
-            navigator.mediaDevices.getDisplayMedia = maskAsNative(function getDisplayMedia(constraints) {
-                if (isEnabled) {
-                    const canvas = document.createElement('canvas');
-                    canvas.width = screen.width || 1920;
-                    canvas.height = screen.height || 1080;
-                    const ctx = canvas.getContext('2d');
-                    if (ctx) {
-                        ctx.fillStyle = '#ffffff';
-                        ctx.fillRect(0, 0, canvas.width, canvas.height);
-                    }
-                    return Promise.resolve(canvas.captureStream(5));
-                }
-                return origGetDisplayMedia(constraints);
-            }, 'getDisplayMedia');
-        }
-
-        if (window.MediaStreamTrack && MediaStreamTrack.prototype.getSettings) {
-            const origGetSettings = MediaStreamTrack.prototype.getSettings;
-            MediaStreamTrack.prototype.getSettings = maskAsNative(function getSettings() {
-                const settings = origGetSettings.apply(this, arguments);
-                if (isEnabled && settings && settings.displaySurface) {
-                    settings.displaySurface = 'monitor';
-                }
-                return settings;
-            }, 'getSettings');
-        }
-    } catch (e) {}
+    if (window.MediaStreamTrack && MediaStreamTrack.prototype.getSettings) {
+        patchMethod(MediaStreamTrack.prototype, 'getSettings', (target, thisArg, args) => {
+            const settings = Reflect.apply(target, thisArg, args);
+            if (settings && settings.displaySurface) {
+                settings.displaySurface = 'monitor';
+            }
+            return settings;
+        });
+    }
 
     ['beforeprint', 'afterprint'].forEach(evName => {
         window.addEventListener(evName, (e) => {
             if (isEnabled) {
                 e.stopImmediatePropagation();
-                e.preventDefault();
             }
         }, true);
     });
 
-    try {
-        const origMatchMedia = window.matchMedia;
-        if (origMatchMedia) {
-            window.matchMedia = maskAsNative(function matchMedia(mediaQueryString) {
-                if (isEnabled && typeof mediaQueryString === 'string' && mediaQueryString.includes('print')) {
-                    return {
-                        matches: false,
-                        media: mediaQueryString,
-                        onchange: null,
-                        addListener: () => {},
-                        removeListener: () => {},
-                        addEventListener: () => {},
-                        removeEventListener: () => {},
-                        dispatchEvent: () => false
-                    };
-                }
-                return origMatchMedia.apply(this, arguments);
-            }, 'matchMedia');
-        }
-    } catch (e) {}
+    if (window.matchMedia) {
+        patchMethod(window, 'matchMedia', (target, thisArg, args) => {
+            const mediaQueryString = args[0];
+            if (typeof mediaQueryString === 'string' && mediaQueryString.includes('print')) {
+                return {
+                    matches: false,
+                    media: mediaQueryString,
+                    onchange: null,
+                    addListener: () => { },
+                    removeListener: () => { },
+                    addEventListener: () => { },
+                    removeEventListener: () => { },
+                    dispatchEvent: () => false
+                };
+            }
+            return Reflect.apply(target, thisArg, args);
+        });
+    }
 
-    try {
-        if (navigator.permissions && navigator.permissions.query) {
-            const origPermQuery = navigator.permissions.query;
-            navigator.permissions.query = maskAsNative(function query(queryObj) {
-                if (isEnabled && queryObj && ['camera', 'microphone', 'notifications', 'display-capture'].includes(queryObj.name)) {
-                    return Promise.resolve({
-                        state: 'granted',
-                        name: queryObj.name,
-                        onchange: null
-                    });
-                }
-                return origPermQuery.apply(this, arguments);
-            }, 'query');
-        }
-    } catch (e) {}
+    if (navigator.permissions && navigator.permissions.query) {
+        patchMethod(navigator.permissions, 'query', (target, thisArg, args) => {
+            const queryObj = args[0];
+            if (queryObj && ['camera', 'microphone', 'notifications', 'display-capture'].includes(queryObj.name)) {
+                return Promise.resolve({
+                    state: 'granted',
+                    name: queryObj.name,
+                    onchange: null
+                });
+            }
+            return Reflect.apply(target, thisArg, args);
+        });
+    }
 
-    // ==================== 7. НЕЙТРАЛИЗАЦИЯ ФУНКЦИЙ БЛОКИРОВКИ ЭКЗАМЕНА ====================
+    // ==================== 5. НЕЙТРАЛИЗАЦИЯ ФУНКЦИЙ БЛОКИРОВКИ ЭКЗАМЕНА ====================
     const blockNames = [
         'block', 'onBlock', 'stopTest', 'pauseExam', 'lockScreen',
         'examViolation', 'reportCheating', 'proctorWarning', 'onViolation'
     ];
     blockNames.forEach(name => {
         if (typeof window[name] === 'function') {
-            const originalFunc = window[name];
-            window[name] = maskAsNative(function (...args) {
-                if (isEnabled) return false;
-                return originalFunc.apply(this, args);
-            }, name);
+            patchMethod(window, name, () => false);
         }
     });
-
-    // ==================== 8. КОНТРОЛЬ СВОЙСТВ ====================
-    setInterval(() => {
-        if (!isEnabled) return;
-        try {
-            if (document.hidden !== false) {
-                defineNativeGetter(document, 'hidden', () => false);
-            }
-            if (document.visibilityState !== 'visible') {
-                defineNativeGetter(document, 'visibilityState', () => 'visible');
-            }
-            if (!document.fullscreenElement) {
-                defineNativeGetter(document, 'fullscreenElement', getEffectiveFullscreenElement);
-            }
-        } catch (e) {}
-    }, 150);
 })();
